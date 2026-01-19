@@ -11,12 +11,7 @@
 - ✅ Base de datos SQLite (`src/database/database.ts`)
 
 ### 🔐 Configuración Actual:
-```env
-PJN_USERNAME=20398297750
-PJN_PASSWORD=k&xwD#qpRh6$7E
-HEADLESS_MODE=true
-CHECK_INTERVAL_MINUTES=30
-```
+**Las credenciales están configuradas en el archivo `.env` (no incluido en el repositorio por seguridad)**
 
 ### ✅ Corrección Aplicada:
 **Error previo:** `TypeError: this.enviarEstadoSistema is not a function`
