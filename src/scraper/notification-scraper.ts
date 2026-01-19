@@ -715,20 +715,22 @@ export class NotificationScraper {
       for (const expediente of expedientesDetectados) {
         if (expediente.tieneNotificacion) {
           const expedienteAnterior = await this.db.getExpedienteByNumero(expediente.numero);
-          
+
           if (!expedienteAnterior) {
             // Expediente nuevo con notificación
             nuevasNotificaciones.push(expediente);
             logger.info(`🆕 Nueva notificación en expediente nuevo: ${expediente.numero}`);
           } else if (!expedienteAnterior.tieneNotificacion) {
             // Expediente existente que ahora tiene notificación
-            nuevasNotificaciones.push(expediente);  
-            logger.info(`🔔 Nueva notificación en expediente existente: ${expediente.numero}`);
-          } else if (expedienteAnterior.notificacionEnviada) {
-            // Podría ser una nueva notificación en un expediente que ya tenía notificaciones
-            // Por ahora lo consideramos como nueva notificación
             nuevasNotificaciones.push(expediente);
-            logger.info(`🔄 Posible nueva notificación en expediente: ${expediente.numero}`);
+            logger.info(`🔔 Nueva notificación en expediente existente: ${expediente.numero}`);
+          } else if (!expedienteAnterior.notificacionEnviada) {
+            // El expediente tenía notificación pero aún no se envió
+            nuevasNotificaciones.push(expediente);
+            logger.info(`📤 Notificación pendiente de envío en expediente: ${expediente.numero}`);
+          } else {
+            // El expediente ya tenía notificación y ya fue enviada - no volver a enviar
+            logger.debug(`✅ Notificación ya enviada para expediente: ${expediente.numero}`);
           }
         }
       }
@@ -764,9 +766,19 @@ export class NotificationScraper {
         const existente = await this.db.getExpedienteByNumero(exp.numero);
         if (existente) {
           expedienteDB.id = existente.id;
-          // Mantener el estado de notificación enviada si no hay nueva notificación
-          if (!exp.tieneNotificacion || existente.tieneNotificacion) {
+
+          // Solo mantener el estado de notificación enviada si el estado NO ha cambiado
+          // Si el expediente pasó de NO tener notificación a TENER notificación, resetear a false
+          if (existente.tieneNotificacion === exp.tieneNotificacion) {
+            // El estado de la notificación no cambió, mantener el estado de envío
             expedienteDB.notificacionEnviada = existente.notificacionEnviada;
+          } else if (!existente.tieneNotificacion && exp.tieneNotificacion) {
+            // Nueva notificación detectada, resetear a false para que se envíe
+            expedienteDB.notificacionEnviada = false;
+            logger.info(`🔄 Estado de notificación cambió para ${exp.numero}: ahora tiene notificación`);
+          } else {
+            // El expediente ya no tiene notificación (raro pero posible)
+            expedienteDB.notificacionEnviada = false;
           }
         }
 
