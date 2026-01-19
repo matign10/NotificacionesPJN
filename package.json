@@ -24,7 +24,8 @@
     "test:tab-fix": "tsx src/test-tab-fix.ts",
     "test:pdf-capture": "tsx src/test-pdf-capture.ts",
     "debug:page-structure": "tsx src/debug-page-structure.ts",
-    "test:telegram-pdf": "tsx src/test-telegram-with-pdf.ts"
+    "test:telegram-pdf": "tsx src/test-telegram-with-pdf.ts",
+    "test:notificacion-ficticia": "tsx src/test-notificacion-ficticia.ts"
   },
   "keywords": [
     "pjn",
