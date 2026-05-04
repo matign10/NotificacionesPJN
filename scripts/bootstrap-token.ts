@@ -1,5 +1,6 @@
 import { chromium, Page } from 'playwright';
 import dotenv from 'dotenv';
+import { NotificacionesApiRepo } from '../src/database/notificaciones-api-repo';
 
 dotenv.config();
 
@@ -78,11 +79,26 @@ async function main() {
     }
 
     console.log('\nLogin OK. Refresh token capturado.\n');
-    console.log('Agregá a tu .env (y/o GitHub Secrets):\n');
-    console.log(`PJN_CLIENT_ID=pjn-sne`);
-    console.log(`PJN_REFRESH_TOKEN=${refreshToken}\n`);
-    console.log('El refresh token se rota en cada uso. Si el monitor falla con "Keycloak refresh failed",');
-    console.log('volvé a correr `npm run bootstrap:token`.');
+
+    if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+      try {
+        const repo = new NotificacionesApiRepo();
+        await repo.setConfig('pjn_refresh_token', refreshToken);
+        console.log('refresh_token guardado en Supabase (kv_config). El monitor lo va a leer de ahí.');
+        console.log('No hace falta tocar PJN_REFRESH_TOKEN en .env ni en GitHub Secrets.\n');
+      } catch (err) {
+        console.warn(`Falló persistencia en Supabase: ${(err as Error).message}`);
+        console.warn('Usá las líneas de abajo como fallback:\n');
+        console.log(`PJN_CLIENT_ID=pjn-sne`);
+        console.log(`PJN_REFRESH_TOKEN=${refreshToken}\n`);
+      }
+    } else {
+      console.log('Agregá a tu .env (y/o GitHub Secrets):\n');
+      console.log(`PJN_CLIENT_ID=pjn-sne`);
+      console.log(`PJN_REFRESH_TOKEN=${refreshToken}\n`);
+    }
+
+    console.log('Si en algún momento el monitor falla con "Token is not active", volvé a correr este bootstrap.');
   } finally {
     await browser.close();
   }

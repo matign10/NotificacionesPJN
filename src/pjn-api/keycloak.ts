@@ -6,6 +6,7 @@ const SAFETY_MARGIN_MS = 30_000;
 export interface KeycloakClientOptions {
   clientId: string;
   refreshToken: string;
+  onRefresh?: (newRefreshToken: string) => Promise<void>;
 }
 
 export class KeycloakClient {
@@ -13,10 +14,12 @@ export class KeycloakClient {
   private refreshToken: string;
   private accessToken: string | null = null;
   private accessTokenExpiresAt = 0;
+  private onRefresh?: (newRefreshToken: string) => Promise<void>;
 
   constructor(opts: KeycloakClientOptions) {
     this.clientId = opts.clientId;
     this.refreshToken = opts.refreshToken;
+    this.onRefresh = opts.onRefresh;
   }
 
   async getAccessToken(): Promise<string> {
@@ -47,8 +50,16 @@ export class KeycloakClient {
     const json = (await res.json()) as KeycloakTokenResponse;
     this.accessToken = json.access_token;
     this.accessTokenExpiresAt = Date.now() + json.expires_in * 1000;
-    if (json.refresh_token) {
+    if (json.refresh_token && json.refresh_token !== this.refreshToken) {
       this.refreshToken = json.refresh_token;
+      if (this.onRefresh) {
+        try {
+          await this.onRefresh(this.refreshToken);
+        } catch (err) {
+          // No fallar la operación si la persistencia falla; sólo loguear.
+          console.warn('onRefresh callback falló:', (err as Error).message);
+        }
+      }
     }
     return this.accessToken;
   }

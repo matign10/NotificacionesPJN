@@ -22,21 +22,16 @@ export interface ApiMonitorResult {
 }
 
 export class ApiMonitor {
-  private keycloak: KeycloakClient;
-  private notifs: NotificacionesClient;
+  private keycloak: KeycloakClient | null = null;
+  private notifs: NotificacionesClient | null = null;
   private repo: NotificacionesApiRepo;
   private telegram: TelegramBot | null = null;
   private cfg: ApiMonitorConfig;
   private telegramReady = false;
+  private clientId: string;
 
   constructor(cfg?: Partial<ApiMonitorConfig>) {
-    const refreshToken = process.env.PJN_REFRESH_TOKEN;
-    const clientId = process.env.PJN_CLIENT_ID || 'pjn-sne';
-    if (!refreshToken) {
-      throw new Error('Falta PJN_REFRESH_TOKEN. Corré `npm run bootstrap:token`.');
-    }
-    this.keycloak = new KeycloakClient({ clientId, refreshToken });
-    this.notifs = new NotificacionesClient(this.keycloak);
+    this.clientId = process.env.PJN_CLIENT_ID || 'pjn-sne';
     this.repo = new NotificacionesApiRepo();
 
     this.cfg = {
@@ -51,6 +46,30 @@ export class ApiMonitor {
   async initialize(): Promise<void> {
     logger.info('Inicializando ApiMonitor...');
     await this.repo.ping();
+
+    // El RT de Keycloak rota en cada refresh y tiene TTL corto; lo guardamos
+    // en kv_config y lo actualizamos automáticamente.
+    const stored = await this.repo.getConfig('pjn_refresh_token');
+    const initial = stored || process.env.PJN_REFRESH_TOKEN;
+    if (!initial) {
+      throw new Error('No hay refresh_token: ni en Supabase (kv_config) ni en PJN_REFRESH_TOKEN. Corré `npm run bootstrap:token`.');
+    }
+    if (stored) {
+      logger.info('Usando refresh_token persistido en Supabase.');
+    } else {
+      logger.info('Usando refresh_token del entorno (será migrado a Supabase tras el primer refresh).');
+    }
+
+    this.keycloak = new KeycloakClient({
+      clientId: this.clientId,
+      refreshToken: initial,
+      onRefresh: async (newRT) => {
+        await this.repo.setConfig('pjn_refresh_token', newRT);
+        logger.info('refresh_token rotado y persistido.');
+      },
+    });
+    this.notifs = new NotificacionesClient(this.keycloak);
+
     if (this.cfg.enableTelegramNotifications) {
       this.telegram = new TelegramBot();
       await this.telegram.initialize();
@@ -76,7 +95,7 @@ export class ApiMonitor {
       fechaDesde.setDate(fechaDesde.getDate() - this.cfg.lookbackDays);
 
       logger.info(`Listando notificaciones RECIBIDAS (lookback ${this.cfg.lookbackDays}d)...`);
-      const items = await this.notifs.listAll({
+      const items = await this.notifs!.listAll({
         bandeja: 'RECIBIDAS',
         fechaDesde,
         fechaHasta,
@@ -144,7 +163,7 @@ export class ApiMonitor {
     };
 
     if (this.cfg.attachPdf) {
-      const pdf = await this.notifs.getPdf(id);
+      const pdf = await this.notifs!.getPdf(id);
       const filename = `notif-${id}.pdf`;
       const sent = await this.telegram.enviarNotificacionConPdf(mensaje, { buffer: pdf, filename });
       if (!sent.success) {

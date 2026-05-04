@@ -87,6 +87,23 @@ export class NotificacionesApiRepo {
     return (data ?? []) as NotificacionApiRow[];
   }
 
+  async getConfig(key: string): Promise<string | null> {
+    const { data, error } = await this.client
+      .from('kv_config')
+      .select('value')
+      .eq('key', key)
+      .maybeSingle();
+    if (error) throw error;
+    return data?.value ?? null;
+  }
+
+  async setConfig(key: string, value: string): Promise<void> {
+    const { error } = await this.client
+      .from('kv_config')
+      .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+    if (error) throw error;
+  }
+
   async getStats(): Promise<{ total: number; pendientes: number; enviadas: number }> {
     const [total, pendientes, enviadas] = await Promise.all([
       this.client.from(TABLE).select('*', { count: 'exact', head: true }),
