@@ -1,149 +1,67 @@
-# PJN Notificaciones Monitor - Contexto para Claude Code
+# PJN Notificaciones Monitor — contexto para Claude Code
 
-## 🎯 Objetivo del Proyecto
-Automatizar la detección de nuevas notificaciones judiciales en el sistema PJN (Poder Judicial de la Nación Argentina) y enviar alertas por Telegram con el contenido en PDF.
+Monitor automático de notificaciones electrónicas del Poder Judicial de la Nación (Argentina). Corre en GitHub Actions cada 30 min, consume el API interno del portal y manda cada notificación nueva por Telegram con su PDF.
 
-## 🔑 Información Clave del Sistema PJN
-- **URL Login**: https://sso.pjn.gov.ar/auth/realms/pjn/protocol/openid-connect/auth
-- **Portal Principal**: https://portalpjn.pjn.gov.ar/
-- **Autenticación**: OpenID Connect con SSO
-- **Indicador de Notificaciones**: Círculo naranja con "n" en la lista de expedientes
-- **Rol del Usuario**: Abogado con expedientes asignados
+## Arquitectura
 
-## 🛠️ Stack Tecnológico
-- **Runtime**: Node.js 20+ en WSL Ubuntu (Windows)
-- **Browser Automation**: Playwright (mejor soporte para SSO)
-- **Notificaciones**: Telegram Bot API
-- **PDF**: Puppeteer o Playwright PDF generation
-- **Scheduler**: node-cron (cada 30 minutos)
-- **Storage**: SQLite + archivos locales
+- **Auth**: OIDC contra Keycloak (`sso.pjn.gov.ar`, realm `pjn`, client `pjn-sne`). Refresh token con TTL ~30 min, **rota en cada uso** y se persiste en `kv_config` de Supabase.
+- **Lista**: `GET https://notif.pjn.gov.ar/api/notificaciones?bandeja=RECIBIDAS&fechaDesde=DDMMYYYY&fechaHasta=DDMMYYYY&page=N&pageSize=M`
+- **PDF**: `GET https://notif.pjn.gov.ar/api/notificaciones/RECIBIDAS/{id}/pdf` → bytes binarios
+- **Storage**: Supabase Postgres. Tabla `notificaciones_api` con PK = `notificacion_id` (id estable que viene del API). Tabla `kv_config` para persistir el refresh_token rotado.
+- **Notificación**: Telegram via Telegraf (`bot.telegram.sendDocument` con buffer del PDF).
 
-## 📁 Estructura del Proyecto
+Documento técnico con todos los endpoints y la decisión arquitectónica: [`REVERSE_ENGINEERING.md`](./REVERSE_ENGINEERING.md).
+
+## Estructura del código
+
 ```
-pjn-notificaciones-monitor/
-├── src/
-│   ├── auth/          # SSO y manejo de sesiones
-│   ├── scraper/       # Detección de notificaciones
-│   ├── pdf/           # Generación de PDFs
-│   ├── telegram/      # Bot de Telegram
-│   └── scheduler/     # Cron jobs
-├── data/
-│   ├── cookies/       # Sesiones persistentes
-│   ├── pdfs/          # PDFs generados
-│   └── db/            # SQLite database
-├── logs/
-├── .env               # Credenciales
-└── CLAUDE.md          # Este archivo
-```
-
-## 🔐 Variables de Entorno Necesarias
-```bash
-# PJN Credentials
-PJN_USERNAME=
-PJN_PASSWORD=
-
-# Telegram Bot
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_CHAT_ID=
-
-# Config
-CHECK_INTERVAL_MINUTES=30
-HEADLESS_MODE=false  # false para debugging en WSL
+src/
+  pjn-api/
+    types.ts              # types del shape del API
+    keycloak.ts           # refresh OIDC con onRefresh callback
+    notificaciones.ts     # list + getPdf
+  monitor/
+    api-monitor.ts        # orchestrador: refresh → list → insert → send → mark
+  database/
+    notificaciones-api-repo.ts   # repo Supabase
+  telegram/
+    telegram-bot.ts       # Telegraf wrapper
+  config.ts               # env + winston logger
+  check-now.ts            # entrypoint usado por GitHub Actions
+  monitor.ts              # entrypoint con cron interno (loop local)
+  index.ts                # alias de monitor.ts
+  test-api-flow.ts        # smoke test e2e
+scripts/
+  bootstrap-token.ts      # login Playwright one-shot, guarda RT en Supabase
+supabase/
+  migrations/
+    20260503_notificaciones_api.sql
+    20260504_kv_config.sql
 ```
 
-## 🚀 Comandos Útiles para Claude Code
+## Idempotencia y dedup
 
-### Inicialización
-```bash
-# Crear estructura completa del proyecto
-claude "Crear la estructura de carpetas y archivos base con package.json y tsconfig.json para el proyecto PJN monitor"
+- `insertIfMissing(notif)` hace insert; si Postgres tira `23505` (unique violation por PK), lo trata como "ya existe, skip".
+- `markSent(id)` se llama **después** del send a Telegram → at-least-once. Si Telegram envía OK pero el proceso muere antes del mark, la próxima corrida la reenvía.
+- El estado de envío vive en la columna `enviada`; nunca se borran filas históricas.
 
-# Instalar dependencias
-claude "Instalar todas las dependencias necesarias: playwright, telegraf, node-cron, dotenv, winston, sqlite3"
-```
+## Variables de entorno
 
-### Desarrollo
-```bash
-# Implementar autenticación SSO
-claude "Implementar el sistema de login SSO del PJN con Playwright, guardando cookies para reutilizar sesiones"
+Ver `.env.example`. En CI van como GitHub Secrets/vars (workflow lee de `secrets.*`).
 
-# Scraper de notificaciones
-claude "Crear scraper que detecte el círculo naranja con 'n' en la lista de expedientes y extraiga la información"
+## Convenciones
 
-# Generador de PDFs
-claude "Implementar función para generar PDF de las notificaciones con Playwright"
+- Sin emojis en código y en commits salvo que el usuario los pida.
+- Spanish para los logs y mensajes al usuario; código en inglés cuando es código nuevo, mantener español si ya existía.
+- Commits estilo "Sustantivo en español: descripción corta" siguiendo el log existente.
+- No introducir dependencias nuevas sin necesidad clara — `fetch` nativo de Node 20+ alcanza para HTTP.
 
-# Bot de Telegram
-claude "Configurar bot de Telegram con Telegraf para enviar notificaciones con PDFs adjuntos"
-```
+## Cómo testear
 
-### Testing en WSL
-```bash
-# Test de login
-claude "Crear script de test para verificar login SSO en modo headed (visible) para debugging en WSL"
+- `npm run test:api-flow` — refresh + list + descarga el primer PDF a `data/pdfs/`. No toca Supabase ni Telegram.
+- `DISABLE_TELEGRAM=true npm run check:now` — corrida real contra Supabase pero sin spamear Telegram.
+- `npm run check:now` — corrida real completa.
 
-# Test de detección
-claude "Script para detectar y mostrar en consola las notificaciones encontradas"
-```
+## Nota de operación
 
-## 📋 Flujo de Trabajo
-
-1. **Autenticación SSO**
-   - Login con credenciales
-   - Guardar cookies/tokens
-   - Verificar sesión activa
-
-2. **Detección de Notificaciones**
-   - Navegar a lista de expedientes
-   - Buscar círculos naranjas con "n"
-   - Comparar con estado anterior
-   - Identificar nuevas notificaciones
-
-3. **Extracción de Contenido**
-   - Abrir expediente con notificación
-   - Capturar contenido relevante
-   - Generar PDF
-
-4. **Envío por Telegram**
-   - Formato: Número + Carátula
-   - Adjuntar PDF generado
-   - Marcar como enviado
-
-## ⚠️ Consideraciones Especiales WSL
-
-1. **Display para Playwright**
-   - Usar `xvfb-run` si es necesario
-   - O configurar `DISPLAY=:0` con X Server
-
-2. **Rutas de Archivos**
-   - Usar rutas Linux: `/mnt/c/Users/...`
-   - Evitar rutas Windows directas
-
-3. **Permisos**
-   - Asegurar permisos correctos en carpetas data/
-
-4. **Debugging**
-   - Iniciar con `headless: false`
-   - Usar screenshots para debugging
-
-## 🎯 Próximos Pasos Inmediatos
-
-1. Configurar proyecto base con TypeScript
-2. Implementar login SSO con persistencia
-3. Crear detector de notificaciones
-4. Configurar bot de Telegram
-5. Implementar scheduler de 30 minutos
-6. Testing completo en WSL
-
-## 💡 Tips para Development
-
-- Siempre probar primero en modo "headed" (navegador visible)
-- Guardar screenshots en cada paso crítico
-- Implementar retry logic para requests
-- Usar selectores específicos del PJN
-- Mantener logs detallados
-- Respetar rate limits del PJN
-
----
-
-**Nota**: Este proyecto debe ejecutarse en WSL Ubuntu. Asegurarse de tener configurado el display para ver el navegador durante el desarrollo.
+Si en Supabase `kv_config.pjn_refresh_token` falta o está desactualizado y la sesión Keycloak expiró, el monitor falla con `Keycloak refresh failed (400): Token is not active`. Solución: `npm run bootstrap:token`.

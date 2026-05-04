@@ -4,18 +4,14 @@ dist/
 *.log
 npm-debug.log*
 
-# Environment
+# Environment / secrets
 .env
 .env.local
 .env.*.local
 
-# Data (permitir database.sqlite para persistencia en GitHub Actions)
-data/logs/
-data/temp/
-data/reverse-eng/
-!data/database.sqlite
-!data/cookies/
-cookies/
+# Data
+data/
+!data/.gitkeep
 
 # Logs
 logs/
@@ -28,6 +24,11 @@ pdfs/
 # IDE
 .vscode/
 .idea/
+.claude/
+
+# MCP / Playwright session state
+.mcp.json
+.playwright-mcp/
 
 # OS
 .DS_Store
@@ -41,7 +42,7 @@ tmp/
 *.swp
 *.swo
 
-# Screenshots
+# Screenshots (local debugging)
 screenshots/
 *.png
 *.jpg

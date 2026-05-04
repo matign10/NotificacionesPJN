@@ -1,203 +1,80 @@
 # PJN Notificaciones Monitor
 
-Sistema automatizado para monitorear notificaciones judiciales del Poder Judicial de la Nación Argentina (PJN) y enviar alertas por Telegram.
+Monitor automático de notificaciones electrónicas del Poder Judicial de la Nación (Argentina). Consulta el API interno del portal cada 30 minutos vía GitHub Actions y envía cada notificación nueva por Telegram con el PDF adjunto.
 
-## 🚀 Características
-
-- ✅ Monitoreo automático cada 30 minutos
-- ✅ Detección de nuevas notificaciones judiciales
-- ✅ Alertas instantáneas por Telegram
-- ✅ Autenticación persistente con SSO
-- ✅ Base de datos local para tracking de estado
-- ✅ Ejecución en GitHub Actions (sin servidor)
-
-## 🚀 Instalación en WSL Ubuntu
-
-### Pre-requisitos
-
-1. **WSL Ubuntu** instalado en Windows
-2. **Node.js 20+** 
-3. **Bot de Telegram** (crear uno con @BotFather)
-4. **Credenciales del PJN**
-
-### Configuración del Entorno WSL
-
-```bash
-# Actualizar sistema
-sudo apt update && sudo apt upgrade -y
-
-# Instalar dependencias del sistema para Playwright
-sudo apt install -y \
-    libnss3 \
-    libnspr4 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2
-
-# Para ver el navegador durante desarrollo (opcional)
-# Instalar VcXsrv en Windows y ejecutarlo
-# En WSL:
-export DISPLAY=:0
-```
-
-### Instalación del Proyecto
-
-```bash
-# Clonar o navegar al directorio del proyecto
-cd /mnt/c/Users/matia/OneDrive/Escritorio/pjn-notificaciones-monitor
-
-# Instalar dependencias
-npm install
-
-# Instalar navegadores de Playwright
-npx playwright install chromium
-
-# Copiar archivo de configuración
-cp .env.example .env
-
-# Editar .env con tus credenciales
-nano .env
-```
-
-## 📝 Configuración
-
-### 1. Credenciales PJN
-Edita el archivo `.env` y agrega:
-```
-PJN_USERNAME=tu_cuit_o_usuario
-PJN_PASSWORD=tu_contraseña
-```
-
-### 2. Bot de Telegram
-
-1. Habla con [@BotFather](https://t.me/botfather) en Telegram
-2. Crea un nuevo bot con `/newbot`
-3. Copia el token y agrégalo a `.env`
-4. Obtén tu Chat ID hablando con [@userinfobot](https://t.me/userinfobot)
-5. Agrega el Chat ID a `.env`
-
-## 🔧 Comandos Disponibles
-
-### Desarrollo Local
-```bash
-# Desarrollo
-npm run dev              # Ejecutar en modo desarrollo
-npm run build           # Compilar TypeScript
-
-# Testing
-npm run test:login      # Probar autenticación
-npm run test:scraper    # Probar detección de notificaciones
-npm run test:telegram   # Probar envío de mensajes
-
-# Monitoreo
-npm run monitor         # Ejecutar monitor continuo (local)
-npm run check:manual    # Verificación manual única
-```
-
-### Comandos del Bot de Telegram
-- `/start` - Iniciar conversación con el bot
-- `/status` - Ver estado del sistema
-- `/test` - Enviar mensaje de prueba
-- `/help` - Ver ayuda
-
-## 🐛 Debugging en WSL
-
-### Ver el navegador
-
-1. Instala [VcXsrv](https://sourceforge.net/projects/vcxsrv/) en Windows
-2. Ejecuta XLaunch con estas opciones:
-   - Multiple windows
-   - Start no client
-   - Disable access control
-3. En WSL:
-```bash
-export DISPLAY=:0
-# Verificar que funciona
-xclock  # Debería mostrar un reloj
-```
-
-### Logs
-
-```bash
-# Ver logs en tiempo real
-tail -f logs/app.log
-
-# Ver solo errores
-tail -f logs/error.log
-```
-
-## 📁 Estructura del Proyecto
+## Arquitectura
 
 ```
-├── src/
-│   ├── auth/          # Autenticación SSO
-│   ├── scraper/       # Detección de notificaciones
-│   ├── telegram/      # Bot de Telegram
-│   └── index.ts       # Entry point
-├── data/
-│   ├── cookies/       # Sesiones guardadas
-│   └── pdfs/          # PDFs generados
-├── logs/              # Archivos de log
-└── CLAUDE.md          # Contexto para Claude Code
+GitHub Actions (cron */30)
+  └─ npm run check:now
+       └─ Refresh OIDC contra sso.pjn.gov.ar (Keycloak realm pjn, client pjn-sne)
+       └─ GET notif.pjn.gov.ar/api/notificaciones?bandeja=RECIBIDAS
+       └─ Por cada id nuevo (PK en Supabase):
+            ├─ GET notif.pjn.gov.ar/api/notificaciones/RECIBIDAS/{id}/pdf
+            └─ Telegram sendDocument
 ```
 
-## 🤖 Comandos para Claude Code
+Detalle de los endpoints y la decisión de migrar del scraper Playwright al API directo: [`REVERSE_ENGINEERING.md`](./REVERSE_ENGINEERING.md).
 
-```bash
-# Desde el directorio del proyecto
-cd /mnt/c/Users/matia/OneDrive/Escritorio/pjn-notificaciones-monitor
+## Setup (una vez por máquina/repo)
 
-# Iniciar Claude Code con el contexto del proyecto
-claude .
+1. Clonar y instalar:
+   ```bash
+   git clone <repo>
+   cd pjn-notificaciones-monitor
+   npm install
+   npx playwright install chromium  # sólo se usa para el bootstrap
+   ```
 
-# Comandos útiles:
-claude "Implementar el login SSO del PJN con manejo de cookies"
-claude "Crear función para detectar notificaciones nuevas"
-claude "Configurar el bot de Telegram para enviar PDFs"
-```
+2. Crear proyecto en [Supabase](https://supabase.com) (free tier).
 
-## ⚠️ Notas Importantes
+3. Aplicar migraciones (Supabase Studio → SQL Editor):
+   ```bash
+   # los .sql están en supabase/migrations/
+   ```
 
-1. **Rate Limiting**: El sistema respeta un intervalo de 30 minutos entre verificaciones
-2. **Sesiones**: Las cookies se guardan para evitar logins repetidos
-3. **PDFs**: Se generan y guardan localmente antes de enviar
-4. **Seguridad**: Nunca commitear el archivo `.env` con credenciales
+4. `.env` local — copiar de `.env.example` y completar:
+   - `SUPABASE_URL`, `SUPABASE_ANON_KEY`
+   - `TELEGRAM_BOT_TOKEN` (de @BotFather), `TELEGRAM_CHAT_ID`
+   - Opcional: `PJN_USERNAME`, `PJN_PASSWORD` (sólo para auto-login en el bootstrap)
 
-## 🆘 Troubleshooting
+5. Capturar el refresh_token del PJN (login one-shot):
+   ```bash
+   npm run bootstrap:token
+   ```
+   Abre el browser, te logueás, y guarda el `refresh_token` en `kv_config` de Supabase.
 
-### Error: "Cannot find Chrome"
-```bash
-npx playwright install chromium
-```
+6. Probar end-to-end:
+   ```bash
+   npm run check:now
+   ```
 
-### Error: "Display not found"
-```bash
-# Opción 1: Ejecutar sin display
-export HEADLESS_MODE=true
+## Deploy en GitHub Actions
 
-# Opción 2: Configurar X Server (VcXsrv)
-export DISPLAY=:0
-```
+Subir como **Repository secrets** (Settings → Secrets and variables → Actions):
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY`
+- `PJN_CLIENT_ID` = `pjn-sne`
+- `PJN_REFRESH_TOKEN` (opcional; se rota a Supabase tras la primera corrida)
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 
-### Permisos en WSL
-```bash
-# Si hay problemas de permisos
-chmod -R 755 data/
-chmod -R 755 logs/
-```
+El workflow `.github/workflows/monitor.yml` corre solo cada 30 min.
 
-## 📞 Soporte
+## Mantenimiento
 
-Si encuentras problemas, revisa:
-1. Los logs en `logs/error.log`
-2. Que el bot de Telegram esté activo
-3. Que las credenciales del PJN sean correctas
-4. Que tengas conexión a internet estable
+- **Si el monitor falla con `Token is not active`**: la sesión Keycloak expiró. Correr `npm run bootstrap:token` y volver a probar.
+- **Forzar reenvío de una notificación**: en Supabase, `update notificaciones_api set enviada=false where notificacion_id=<id>`.
+- **Ver pendientes**: `select * from notificaciones_api where enviada=false`.
+
+## Comandos
+
+| Comando | Para qué |
+|---|---|
+| `npm run bootstrap:token` | Login one-shot, guarda refresh_token en Supabase |
+| `npm run check:now` | Una corrida del monitor (idéntico a lo que hace GitHub Actions) |
+| `npm run test:api-flow` | Smoke test: refresh + list + descarga 1 PDF a `data/pdfs/` |
+| `npm run dev` / `monitor` | Loop continuo local con cron interno |
+| `npm run build` | Compilar TS a `dist/` |
+
+## Stack
+
+Node 20, TypeScript, fetch nativo, Telegraf (Telegram), Supabase (Postgres), node-cron (sólo para el modo loop local). Playwright sólo se usa en `scripts/bootstrap-token.ts`.
