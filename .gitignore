@@ -12,6 +12,7 @@ npm-debug.log*
 # Data (permitir database.sqlite para persistencia en GitHub Actions)
 data/logs/
 data/temp/
+data/reverse-eng/
 !data/database.sqlite
 !data/cookies/
 cookies/

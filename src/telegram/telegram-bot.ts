@@ -1,8 +1,5 @@
 import { Telegraf, Context } from 'telegraf';
 import { config, logger } from '../config';
-import { Expediente } from '../database/database';
-// import fs from 'fs/promises'; // Removido con PDFs
-// import path from 'path'; // Removido con PDFs
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 
@@ -208,7 +205,31 @@ Por ahora, puedes revisar los logs del sistema para ver la actividad.`);
     }
   }
 
-  // Funcionalidad de PDFs removida
+  /**
+   * Envía una notificación con un PDF adjunto (modo API).
+   */
+  async enviarNotificacionConPdf(
+    notificacion: NotificationMessage,
+    pdf: { buffer: Buffer; filename: string }
+  ): Promise<TelegramSendResult> {
+    try {
+      if (!this.isInitialized) {
+        throw new Error('Bot no inicializado');
+      }
+
+      const caption = this.formatearMensajeNotificacion(notificacion);
+      const sent = await this.bot.telegram.sendDocument(
+        this.config.chatId,
+        { source: pdf.buffer, filename: pdf.filename },
+        { caption, parse_mode: 'HTML' }
+      );
+
+      return { success: true, messageId: sent.message_id };
+    } catch (error) {
+      logger.error('Error al enviar notificación con PDF por Telegram:', error);
+      return { success: false, error: (error as Error).toString() };
+    }
+  }
 
   /**
    * Formatea el mensaje de notificación
@@ -246,80 +267,6 @@ Por ahora, puedes revisar los logs del sistema para ver la actividad.`);
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
-  }
-
-  // Funcionalidad de PDFs removida
-
-  /**
-   * Formatea el tamaño de archivo en formato legible
-   */
-  private formatearTamano(bytes: number): string {
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    if (bytes === 0) return '0 Bytes';
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
-  }
-
-  /**
-   * Envía un resumen de notificaciones
-   */
-  async enviarResumen(expedientes: Expediente[]): Promise<TelegramSendResult> {
-    try {
-      if (!this.isInitialized) {
-        throw new Error('Bot no inicializado');
-      }
-
-      if (expedientes.length === 0) {
-        const mensaje = `📊 <b>Resumen de Verificación</b>
-
-✅ <b>Sistema operativo</b>
-🔍 <b>Última verificación:</b> ${dayjs().format('DD/MM/YYYY HH:mm')}
-📋 <b>Resultado:</b> No se encontraron nuevas notificaciones
-
-🤖 <i>El monitoreo continúa activo</i>`;
-
-        const mensajeEnviado = await this.bot.telegram.sendMessage(
-          this.config.chatId,
-          mensaje,
-          { parse_mode: 'HTML' }
-        );
-
-        return {
-          success: true,
-          messageId: mensajeEnviado.message_id
-        };
-      }
-
-      const mensaje = `📊 <b>RESUMEN DE NOTIFICACIONES</b>
-
-🔔 <b>Nuevas notificaciones encontradas:</b> ${expedientes.length}
-📅 <b>Fecha:</b> ${dayjs().format('DD/MM/YYYY HH:mm')}
-
-📋 <b>Expedientes:</b>
-${expedientes.map((exp, index) => 
-  `${index + 1}. <code>${exp.numero}</code>\n   ${this.escaparHTML(exp.caratula.substring(0, 80))}...`
-).join('\n\n')}
-
-🤖 <i>Monitoreo de notificaciones activo</i>`;
-
-      const mensajeEnviado = await this.bot.telegram.sendMessage(
-        this.config.chatId,
-        mensaje,
-        { parse_mode: 'HTML' }
-      );
-
-      return {
-        success: true,
-        messageId: mensajeEnviado.message_id
-      };
-
-    } catch (error) {
-      logger.error('Error al enviar resumen por Telegram:', error);
-      return {
-        success: false,
-        error: (error as Error).toString()
-      };
-    }
   }
 
   /**

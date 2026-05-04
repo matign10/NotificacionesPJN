@@ -2,10 +2,8 @@ import dotenv from 'dotenv';
 import winston from 'winston';
 import path from 'path';
 
-// Cargar variables de entorno
 dotenv.config();
 
-// Configurar logger
 export const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
   format: winston.format.combine(
@@ -14,69 +12,60 @@ export const logger = winston.createLogger({
     winston.format.json()
   ),
   transports: [
-    new winston.transports.File({ 
-      filename: path.join(__dirname, '../logs/error.log'), 
-      level: 'error' 
+    new winston.transports.File({
+      filename: path.join(__dirname, '../logs/error.log'),
+      level: 'error',
     }),
-    new winston.transports.File({ 
-      filename: path.join(__dirname, '../logs/app.log') 
+    new winston.transports.File({
+      filename: path.join(__dirname, '../logs/app.log'),
     }),
     new winston.transports.Console({
       format: winston.format.combine(
         winston.format.colorize(),
         winston.format.simple()
-      )
-    })
-  ]
+      ),
+    }),
+  ],
 });
 
-// Verificar configuración
 export function checkConfig(): boolean {
   const required = [
-    'PJN_USERNAME',
-    'PJN_PASSWORD',
+    'PJN_REFRESH_TOKEN',
     'TELEGRAM_BOT_TOKEN',
-    'TELEGRAM_CHAT_ID'
+    'TELEGRAM_CHAT_ID',
+    'SUPABASE_URL',
+    'SUPABASE_ANON_KEY',
   ];
 
-  const missing = required.filter(key => !process.env[key]);
-  
+  const missing = required.filter((key) => !process.env[key]);
+
   if (missing.length > 0) {
-    logger.error('Faltan variables de entorno:', missing);
-    console.error(`
-❌ Error de configuración
-
-Faltan las siguientes variables en el archivo .env:
-${missing.map(m => `  - ${m}`).join('\n')}
-
-Por favor:
-1. Copia .env.example a .env
-2. Completa todas las variables requeridas
-3. Intenta nuevamente
-    `);
+    logger.error('Faltan variables de entorno: ' + missing.join(', '));
     return false;
   }
 
-  logger.info('Configuración verificada correctamente');
   return true;
 }
 
-// Configuración de la aplicación
 export const config = {
   pjn: {
-    username: process.env.PJN_USERNAME!,
-    password: process.env.PJN_PASSWORD!,
-    loginUrl: 'https://sso.pjn.gov.ar/auth/realms/pjn/protocol/openid-connect/auth',
-    portalUrl: 'https://portalpjn.pjn.gov.ar/'
+    clientId: process.env.PJN_CLIENT_ID || 'pjn-sne',
+    refreshToken: process.env.PJN_REFRESH_TOKEN || '',
   },
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN!,
-    chatId: process.env.TELEGRAM_CHAT_ID!
+    chatId: process.env.TELEGRAM_CHAT_ID!,
+  },
+  supabase: {
+    url: process.env.SUPABASE_URL!,
+    anonKey: process.env.SUPABASE_ANON_KEY!,
   },
   app: {
-    checkIntervalMinutes: parseInt(process.env.CHECK_INTERVAL_MINUTES || '30'),
-    headlessMode: process.env.HEADLESS_MODE === 'true',
+    checkIntervalMinutes: parseInt(process.env.CHECK_INTERVAL_MINUTES || '30', 10),
+    lookbackDays: parseInt(process.env.LOOKBACK_DAYS || '60', 10),
+    attachPdf: process.env.ATTACH_PDF !== 'false',
+    disableTelegram: process.env.DISABLE_TELEGRAM === 'true',
     dataDir: path.join(__dirname, '../data'),
-    logsDir: path.join(__dirname, '../logs')
-  }
+    logsDir: path.join(__dirname, '../logs'),
+  },
 };

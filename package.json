@@ -1,36 +1,19 @@
 {
   "name": "pjn-notificaciones-monitor",
-  "version": "1.0.0",
-  "description": "Monitor automático de notificaciones judiciales del PJN con alertas por Telegram",
+  "version": "2.0.0",
+  "description": "Monitor automático de notificaciones judiciales del PJN con alertas por Telegram (modo API)",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "tsx src/test.ts",
-    "test:login": "tsx src/auth/test-login.ts",
-    "test:scraper": "tsx src/scraper/test-scraper.ts",
-    "test:telegram": "tsx src/telegram/test-telegram.ts",
-    "test:navegacion": "tsx src/test-navegacion.ts",
-    "test:navegacion-simple": "tsx src/test-navegacion-simple.ts",
-    "verificar:contenido": "tsx src/verificar-contenido.ts",
-    "debug:pestanas": "tsx src/debug-pestanas.ts",
-    "get-chat-id": "tsx src/get-chat-id.ts",
-    "test-bot-token": "tsx src/test-bot-token.ts",
-    "reset-db-test": "tsx src/reset-db-test.ts",
     "monitor": "tsx src/monitor.ts",
     "check:now": "tsx src/check-now.ts",
-    "check:manual": "tsx src/manual-check.ts",
-    "test:tab-fix": "tsx src/test-tab-fix.ts",
-    "test:pdf-capture": "tsx src/test-pdf-capture.ts",
-    "debug:page-structure": "tsx src/debug-page-structure.ts",
-    "test:telegram-pdf": "tsx src/test-telegram-with-pdf.ts",
-    "test:notificacion-ficticia": "tsx src/test-notificacion-ficticia.ts",
-    "test:notificacion-offline": "tsx src/test-notificacion-offline.ts"
+    "bootstrap:token": "tsx scripts/bootstrap-token.ts",
+    "test:api-flow": "tsx src/test-api-flow.ts"
   },
   "keywords": [
     "pjn",
-    "scraping",
     "telegram",
     "notifications"
   ],
@@ -38,22 +21,16 @@
   "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.50.5",
-    "@types/uuid": "^10.0.0",
     "dayjs": "^1.11.10",
     "dotenv": "^16.3.1",
     "node-cron": "^3.0.3",
-    "pdf-lib": "^1.17.1",
-    "playwright": "^1.41.0",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^5.1.7",
     "telegraf": "^4.15.3",
-    "uuid": "^11.1.0",
     "winston": "^3.11.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "@types/node-cron": "^3.0.11",
-    "@types/sqlite3": "^3.1.11",
+    "playwright": "^1.41.0",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }

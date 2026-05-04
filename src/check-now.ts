@@ -1,63 +1,47 @@
 /**
- * Script para ejecutar una verificación inmediata
- * Usado por GitHub Actions y para pruebas manuales
+ * Verificación inmediata. Usado por GitHub Actions y para pruebas manuales.
  */
 
-import { PJNMonitor } from './monitor/pjn-monitor';
-import { config, logger } from './config';
 import dayjs from 'dayjs';
+import dotenv from 'dotenv';
+import { ApiMonitor } from './monitor/api-monitor';
+import { logger } from './config';
 
-async function ejecutarVerificacion() {
-  let monitor: PJNMonitor | null = null;
+dotenv.config();
 
-  try {
-    console.log(`
+async function main() {
+  console.log(`
 ╔════════════════════════════════════════╗
 ║     PJN - VERIFICACIÓN MANUAL          ║
 ║     ${dayjs().format('DD/MM/YYYY HH:mm:ss')}          ║
 ╚════════════════════════════════════════╝
-    `);
+  `);
 
-    // Crear instancia del monitor
-    logger.info('Inicializando monitor para verificación única...');
-    monitor = new PJNMonitor({
-      enableTelegramNotifications: true
-    });
-
-    // Inicializar
+  const monitor = new ApiMonitor();
+  try {
     await monitor.initialize();
-
-    // Ejecutar verificación
-    logger.info('Ejecutando verificación...');
-    const resultado = await monitor.ejecutarVerificacion();
-
-    // Mostrar resultados
+    const result = await monitor.run();
     console.log(`
-📊 RESULTADOS DE LA VERIFICACIÓN
+📊 RESULTADOS
 
-${resultado.success ? '✅' : '❌'} Estado: ${resultado.success ? 'EXITOSA' : 'ERROR'}
-⏱️  Duración: ${resultado.duracion}ms
-📋 Expedientes encontrados: ${resultado.expedientesEncontrados}
-🆕 Nuevas notificaciones: ${resultado.nuevasNotificaciones}
-📱 Notificaciones enviadas: ${resultado.notificacionesEnviadas}
+${result.success ? '✅' : '❌'} Estado: ${result.success ? 'EXITOSA' : 'CON ERRORES'}
+⏱️  Duración: ${result.duracionMs}ms
+📋 Total notificaciones API: ${result.total}
+🆕 Nuevas: ${result.nuevas}
+📱 Enviadas a Telegram: ${result.enviadas}
     `);
-
-    if (resultado.errores.length > 0) {
-      console.log('❌ ERRORES ENCONTRADOS:');
-      resultado.errores.forEach((error, index) => {
-        console.log(`  ${index + 1}. ${error}`);
-      });
+    if (result.errores.length > 0) {
+      console.log('❌ Errores:');
+      result.errores.forEach((e, i) => console.log(`  ${i + 1}. ${e}`));
     }
-
-    // En GitHub Actions, salir con código apropiado
-    process.exit(resultado.success ? 0 : 1);
-
-  } catch (error) {
-    logger.error('Error fatal durante verificación:', error);
-    console.error('💥 ERROR FATAL:', error);
-    process.exit(1);
+    process.exit(result.success ? 0 : 1);
+  } finally {
+    await monitor.cleanup().catch(() => undefined);
   }
 }
 
-// Ejecutar
-ejecutarVerificacion();
+main().catch((err) => {
+  logger.error('Error fatal en check-now:', err);
+  console.error('💥 ERROR FATAL:', err);
+  process.exit(1);
+});

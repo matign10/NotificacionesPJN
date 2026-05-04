@@ -25,35 +25,19 @@ jobs:
         cache: 'npm'
     
     - name: Instalar dependencias
-      run: npm ci
-    
-    - name: Instalar Playwright
-      run: |
-        npx playwright install --with-deps chromium
-        npx playwright install-deps
-    
-    - name: Crear directorio de datos
-      run: mkdir -p ./data/cookies
-    
-    - name: Verificar estado actual
-      run: |
-        echo "Contenido de ./data:"
-        ls -la ./data/ || echo "Directorio data no existe"
-        echo "Base de datos existe:" 
-        ls -la ./data/database.sqlite || echo "database.sqlite no existe"
-        echo "Cookies existen:"
-        ls -la ./data/cookies/ || echo "cookies no existen"
-    
+      run: npm ci --ignore-scripts
+
     - name: Ejecutar verificación
       env:
-        PJN_USERNAME: ${{ secrets.PJN_USERNAME }}
-        PJN_PASSWORD: ${{ secrets.PJN_PASSWORD }}
+        PJN_CLIENT_ID: ${{ secrets.PJN_CLIENT_ID }}
+        PJN_REFRESH_TOKEN: ${{ secrets.PJN_REFRESH_TOKEN }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        LOOKBACK_DAYS: ${{ vars.LOOKBACK_DAYS || '60' }}
+        ATTACH_PDF: ${{ vars.ATTACH_PDF || 'true' }}
         NODE_ENV: production
-        HEADLESS_MODE: true
       run: npm run check:now
     
     # Ya no necesitamos commits - Supabase persiste automáticamente

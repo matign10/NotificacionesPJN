@@ -1,0 +1,105 @@
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { logger } from '../config';
+import { Notificacion } from '../pjn-api/types';
+
+export interface NotificacionApiRow {
+  notificacion_id: number;
+  expediente_numeracion: string;
+  expediente_caratula: string;
+  fecha: string;
+  numero_cedula: number | null;
+  origen: string | null;
+  enviada: boolean;
+  fecha_envio: string | null;
+  raw: Notificacion;
+  created_at: string;
+}
+
+const TABLE = 'notificaciones_api';
+
+export class NotificacionesApiRepo {
+  private client: SupabaseClient;
+
+  constructor() {
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_ANON_KEY;
+    if (!url || !key) {
+      throw new Error('Faltan SUPABASE_URL y/o SUPABASE_ANON_KEY en el entorno.');
+    }
+    this.client = createClient(url, key);
+  }
+
+  async ping(): Promise<void> {
+    const { error } = await this.client.from(TABLE).select('notificacion_id').limit(1);
+    if (error && error.code !== 'PGRST116') {
+      throw new Error(`Supabase ping falló (${error.code}): ${error.message}`);
+    }
+  }
+
+  async existsById(id: number): Promise<boolean> {
+    const { data, error } = await this.client
+      .from(TABLE)
+      .select('notificacion_id')
+      .eq('notificacion_id', id)
+      .maybeSingle();
+    if (error) throw error;
+    return !!data;
+  }
+
+  async insertIfMissing(notif: Notificacion): Promise<boolean> {
+    const row = {
+      notificacion_id: notif.id,
+      expediente_numeracion: notif.expediente.numeracion,
+      expediente_caratula: notif.expediente.caratula,
+      fecha: new Date(notif.fecha).toISOString(),
+      numero_cedula: notif.numeroCedula ?? null,
+      origen: notif.origen ?? null,
+      enviada: false,
+      raw: notif,
+    };
+    const { error } = await this.client
+      .from(TABLE)
+      .insert(row);
+
+    if (error) {
+      // 23505 = unique violation: ya existía, no es error
+      if (error.code === '23505') return false;
+      throw error;
+    }
+    return true;
+  }
+
+  async markSent(id: number): Promise<void> {
+    const { error } = await this.client
+      .from(TABLE)
+      .update({ enviada: true, fecha_envio: new Date().toISOString() })
+      .eq('notificacion_id', id);
+    if (error) throw error;
+  }
+
+  async getPendientes(): Promise<NotificacionApiRow[]> {
+    const { data, error } = await this.client
+      .from(TABLE)
+      .select('*')
+      .eq('enviada', false)
+      .order('fecha', { ascending: true });
+    if (error) throw error;
+    return (data ?? []) as NotificacionApiRow[];
+  }
+
+  async getStats(): Promise<{ total: number; pendientes: number; enviadas: number }> {
+    const [total, pendientes, enviadas] = await Promise.all([
+      this.client.from(TABLE).select('*', { count: 'exact', head: true }),
+      this.client.from(TABLE).select('*', { count: 'exact', head: true }).eq('enviada', false),
+      this.client.from(TABLE).select('*', { count: 'exact', head: true }).eq('enviada', true),
+    ]);
+    if (total.error || pendientes.error || enviadas.error) {
+      logger.warn('Error en getStats', { total: total.error, pendientes: pendientes.error, enviadas: enviadas.error });
+    }
+    return {
+      total: total.count ?? 0,
+      pendientes: pendientes.count ?? 0,
+      enviadas: enviadas.count ?? 0,
+    };
+  }
+}
