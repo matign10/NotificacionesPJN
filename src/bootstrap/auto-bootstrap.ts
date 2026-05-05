@@ -1,0 +1,140 @@
+import { chromium, BrowserContext, Page } from 'playwright';
+import { logger } from '../config';
+import { NotificacionesApiRepo } from '../database/notificaciones-api-repo';
+
+interface AppTarget {
+  label: string;
+  url: string;
+  ssKey: string;
+  kvKey: string;
+}
+
+export const BOOTSTRAP_TARGETS: AppTarget[] = [
+  {
+    label: 'pjn-sne (notificaciones)',
+    url: 'https://notif.pjn.gov.ar/',
+    ssKey: 'oidc.user:https://sso.pjn.gov.ar/auth/realms/pjn:pjn-sne',
+    kvKey: 'pjn_refresh_token_sne',
+  },
+  {
+    label: 'pjn-portal (entradas)',
+    url: 'https://portalpjn.pjn.gov.ar/',
+    ssKey: 'oidc.user:https://sso.pjn.gov.ar/auth/realms/pjn:pjn-portal',
+    kvKey: 'pjn_refresh_token_portal',
+  },
+];
+
+const TIMEOUT_MS = 5 * 60 * 1000;
+const POLL_MS = 1000;
+
+export interface BootstrapOptions {
+  username?: string;
+  password?: string;
+  headless?: boolean;
+  persist?: boolean;
+}
+
+async function autoLogin(page: Page, username: string, password: string): Promise<void> {
+  await page.waitForSelector('input[name="username"], input[id="username"]', { timeout: 30_000 });
+  await page.locator('input[name="username"], input[id="username"]').first().fill(username);
+  await page.locator('input[name="password"], input[id="password"]').first().fill(password);
+  await page.locator('button[type="submit"], input[type="submit"]').first().click();
+}
+
+async function captureRt(
+  context: BrowserContext,
+  target: AppTarget,
+  autoCreds: { user: string; pass: string } | null
+): Promise<string> {
+  const page = await context.newPage();
+  try {
+    await page.goto(target.url, { waitUntil: 'domcontentloaded' });
+
+    const isLoginPage = (await page.locator('input[name="username"], input[id="username"]').count()) > 0;
+    if (isLoginPage) {
+      if (autoCreds) {
+        try {
+          await autoLogin(page, autoCreds.user, autoCreds.pass);
+        } catch (err) {
+          logger.warn(`Login automatico fallo para ${target.label}: ${(err as Error).message}`);
+        }
+      } else {
+        logger.info(`Login manual requerido para ${target.label}.`);
+      }
+    } else {
+      logger.info(`Sesion SSO ya activa para ${target.label}.`);
+    }
+
+    const deadline = Date.now() + TIMEOUT_MS;
+    let raw: string | null = null;
+    while (Date.now() < deadline) {
+      try {
+        raw = await page.evaluate(
+          // page.evaluate runs in browser context where sessionStorage exists.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (key: string) => (globalThis as any).sessionStorage.getItem(key) as string | null,
+          target.ssKey
+        );
+      } catch {
+        // cross-origin during redirects
+      }
+      if (raw) break;
+      await page.waitForTimeout(POLL_MS);
+    }
+    if (!raw) throw new Error(`Timeout esperando token de ${target.label}.`);
+
+    const oidc = JSON.parse(raw);
+    const rt: string | undefined = oidc.refresh_token;
+    if (!rt) throw new Error(`OIDC user de ${target.label} sin refresh_token.`);
+    return rt;
+  } finally {
+    await page.close();
+  }
+}
+
+/**
+ * Captura los refresh_tokens de todos los clients y los persiste en
+ * Supabase (kv_config). Usado tanto por el script CLI como por el
+ * auto-recovery del monitor cuando la sesion Keycloak se invalida.
+ */
+export async function runBootstrap(opts: BootstrapOptions = {}): Promise<Record<string, string>> {
+  const username = opts.username ?? process.env.PJN_USERNAME;
+  const password = opts.password ?? process.env.PJN_PASSWORD;
+  const headless = opts.headless ?? process.env.HEADLESS_MODE !== 'false';
+  const persist = opts.persist ?? true;
+  const autoCreds = username && password ? { user: username, pass: password } : null;
+
+  logger.info(`Bootstrap: modo=${autoCreds ? 'auto' : 'manual'} headless=${headless}`);
+
+  const browser = await chromium.launch({ headless });
+  const context = await browser.newContext({
+    locale: 'es-AR',
+    timezoneId: 'America/Argentina/Buenos_Aires',
+  });
+
+  const tokens: Record<string, string> = {};
+  try {
+    for (const target of BOOTSTRAP_TARGETS) {
+      const rt = await captureRt(context, target, autoCreds);
+      tokens[target.kvKey] = rt;
+      logger.info(`Bootstrap OK: ${target.label}`);
+    }
+  } finally {
+    await browser.close();
+  }
+
+  if (persist && process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+    const repo = new NotificacionesApiRepo();
+    for (const [key, value] of Object.entries(tokens)) {
+      await repo.setConfig(key, value);
+      logger.info(`Bootstrap: persistido ${key} en kv_config.`);
+    }
+  }
+
+  return tokens;
+}
+
+export function isSessionDeadError(err: unknown): boolean {
+  const msg = (err as Error)?.message ?? '';
+  return /Token is not active|invalid_grant/i.test(msg);
+}

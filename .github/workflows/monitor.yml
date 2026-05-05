@@ -13,37 +13,42 @@ on:
 jobs:
   check-notifications:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout código
       uses: actions/checkout@v4
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-    
+
     - name: Configurar Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20'
         cache: 'npm'
-    
+
     - name: Instalar dependencias
       run: npm ci --ignore-scripts
 
+    # Playwright se usa para auto-bootstrap cuando la sesion Keycloak se
+    # invalida. La mayoria de las corridas no lo necesitan, pero hay que
+    # tener Chromium listo por si toca recuperar.
+    - name: Instalar Chromium para Playwright
+      run: npx playwright install --with-deps chromium
+
     - name: Ejecutar verificación
       env:
-        PJN_CLIENT_ID: ${{ secrets.PJN_CLIENT_ID }}
-        PJN_REFRESH_TOKEN: ${{ secrets.PJN_REFRESH_TOKEN }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        PJN_USERNAME: ${{ secrets.PJN_USERNAME }}
+        PJN_PASSWORD: ${{ secrets.PJN_PASSWORD }}
         LOOKBACK_DAYS: ${{ vars.LOOKBACK_DAYS || '60' }}
         ATTACH_PDF: ${{ vars.ATTACH_PDF || 'true' }}
+        HEADLESS_MODE: 'true'
         NODE_ENV: production
       run: npm run check:now
-    
-    # Ya no necesitamos commits - Supabase persiste automáticamente
-    
+
     - name: Guardar logs en caso de error
       if: failure()
       uses: actions/upload-artifact@v4
