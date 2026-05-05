@@ -1,11 +1,31 @@
-import { chromium, Page } from 'playwright';
+import { chromium, BrowserContext, Page } from 'playwright';
 import dotenv from 'dotenv';
 import { NotificacionesApiRepo } from '../src/database/notificaciones-api-repo';
 
 dotenv.config();
 
-const TARGET_URL = 'https://notif.pjn.gov.ar/';
-const SS_KEY = 'oidc.user:https://sso.pjn.gov.ar/auth/realms/pjn:pjn-sne';
+interface AppTarget {
+  label: string;
+  url: string;
+  ssKey: string;
+  kvKey: string;
+}
+
+const TARGETS: AppTarget[] = [
+  {
+    label: 'pjn-sne (notificaciones)',
+    url: 'https://notif.pjn.gov.ar/',
+    ssKey: 'oidc.user:https://sso.pjn.gov.ar/auth/realms/pjn:pjn-sne',
+    kvKey: 'pjn_refresh_token_sne',
+  },
+  {
+    label: 'pjn-portal (entradas)',
+    url: 'https://portalpjn.pjn.gov.ar/',
+    ssKey: 'oidc.user:https://sso.pjn.gov.ar/auth/realms/pjn:pjn-portal',
+    kvKey: 'pjn_refresh_token_portal',
+  },
+];
+
 const TIMEOUT_MS = 5 * 60 * 1000;
 const POLL_MS = 1000;
 
@@ -23,88 +43,98 @@ async function autoLogin(page: Page, username: string, password: string): Promis
   await page.locator('button[type="submit"], input[type="submit"]').first().click();
 }
 
-async function main() {
-  const headlessEnv = process.env.HEADLESS_MODE;
-  const headless = headlessEnv === 'true';
-  const username = process.env.PJN_USERNAME;
-  const password = process.env.PJN_PASSWORD;
-  const auto = !!(username && password);
-
-  console.log(`Modo: ${auto ? 'login automático' : 'login manual (logueate vos)'}`);
-  console.log(`Headless: ${headless}`);
-  console.log(`Target: ${TARGET_URL}\n`);
-
-  const browser = await chromium.launch({ headless });
-  const context = await browser.newContext({
-    locale: 'es-AR',
-    timezoneId: 'America/Argentina/Buenos_Aires',
-  });
+async function captureRt(context: BrowserContext, target: AppTarget, autoCreds: { user: string; pass: string } | null): Promise<string> {
   const page = await context.newPage();
-
   try {
-    await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded' });
+    await page.goto(target.url, { waitUntil: 'domcontentloaded' });
 
-    if (auto) {
-      try {
-        await autoLogin(page, username!, password!);
-      } catch (err) {
-        console.warn(`\nLogin automático falló (${(err as Error).message}).`);
-        console.warn('Si hay MFA o captcha, completalo a mano en la ventana del navegador.\n');
+    const isLoginPage = await page.locator('input[name="username"], input[id="username"]').count() > 0;
+    if (isLoginPage) {
+      if (autoCreds) {
+        try {
+          await autoLogin(page, autoCreds.user, autoCreds.pass);
+        } catch (err) {
+          console.warn(`Login automatico fallo (${(err as Error).message}). Completá manualmente.`);
+        }
+      } else {
+        console.log('Logueate manualmente en la ventana del navegador.');
       }
     } else {
-      console.log('Logueate manualmente en la ventana del navegador.\n');
+      console.log(`Sesion SSO ya activa para ${target.label}.`);
     }
 
-    console.log(`Esperando token (timeout ${TIMEOUT_MS / 1000}s)...`);
+    console.log(`Esperando token de ${target.label} (timeout ${TIMEOUT_MS / 1000}s)...`);
     const deadline = Date.now() + TIMEOUT_MS;
     let raw: string | null = null;
     while (Date.now() < deadline) {
       try {
-        raw = await page.evaluate((key) => sessionStorage.getItem(key), SS_KEY);
+        raw = await page.evaluate((key) => sessionStorage.getItem(key), target.ssKey);
       } catch {
-        // Cross-origin durante redirects: ignorar y reintentar
+        // Cross-origin durante redirects
       }
       if (raw) break;
       await page.waitForTimeout(POLL_MS);
     }
 
     if (!raw) {
-      throw new Error('Timeout esperando login. No se encontró el OIDC user en sessionStorage.');
+      throw new Error(`Timeout esperando token de ${target.label}.`);
     }
 
     const oidcUser = JSON.parse(raw);
     const refreshToken: string | undefined = oidcUser.refresh_token;
     if (!refreshToken) {
-      throw new Error('OIDC user encontrado pero sin refresh_token.');
+      throw new Error(`OIDC user de ${target.label} sin refresh_token.`);
     }
-
-    console.log('\nLogin OK. Refresh token capturado.\n');
-
-    if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
-      try {
-        const repo = new NotificacionesApiRepo();
-        await repo.setConfig('pjn_refresh_token', refreshToken);
-        console.log('refresh_token guardado en Supabase (kv_config). El monitor lo va a leer de ahí.');
-        console.log('No hace falta tocar PJN_REFRESH_TOKEN en .env ni en GitHub Secrets.\n');
-      } catch (err) {
-        console.warn(`Falló persistencia en Supabase: ${(err as Error).message}`);
-        console.warn('Usá las líneas de abajo como fallback:\n');
-        console.log(`PJN_CLIENT_ID=pjn-sne`);
-        console.log(`PJN_REFRESH_TOKEN=${refreshToken}\n`);
-      }
-    } else {
-      console.log('Agregá a tu .env (y/o GitHub Secrets):\n');
-      console.log(`PJN_CLIENT_ID=pjn-sne`);
-      console.log(`PJN_REFRESH_TOKEN=${refreshToken}\n`);
-    }
-
-    console.log('Si en algún momento el monitor falla con "Token is not active", volvé a correr este bootstrap.');
+    console.log(`OK ${target.label}: refresh_token capturado.`);
+    return refreshToken;
   } finally {
-    await browser.close();
+    await page.close();
   }
 }
 
+async function main() {
+  const headless = process.env.HEADLESS_MODE === 'true';
+  const username = process.env.PJN_USERNAME;
+  const password = process.env.PJN_PASSWORD;
+  const autoCreds = username && password ? { user: username, pass: password } : null;
+
+  console.log(`Modo: ${autoCreds ? 'login automatico' : 'login manual'}`);
+  console.log(`Headless: ${headless}\n`);
+
+  const browser = await chromium.launch({ headless });
+  const context = await browser.newContext({
+    locale: 'es-AR',
+    timezoneId: 'America/Argentina/Buenos_Aires',
+  });
+
+  const tokens: Record<string, string> = {};
+  try {
+    for (const target of TARGETS) {
+      const rt = await captureRt(context, target, autoCreds);
+      tokens[target.kvKey] = rt;
+    }
+  } finally {
+    await browser.close();
+  }
+
+  if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+    const repo = new NotificacionesApiRepo();
+    for (const [key, value] of Object.entries(tokens)) {
+      await repo.setConfig(key, value);
+      console.log(`Guardado en Supabase (kv_config): ${key}`);
+    }
+    console.log('\nListo. El monitor lee ambos RT desde Supabase.');
+  } else {
+    console.log('\nSin Supabase configurado. RTs capturados:');
+    for (const [key, value] of Object.entries(tokens)) {
+      console.log(`${key}=${value}`);
+    }
+  }
+
+  console.log('\nSi el monitor falla con "Token is not active", volve a correr este bootstrap.');
+}
+
 main().catch((err) => {
-  console.error('Bootstrap falló:', err);
+  console.error('Bootstrap fallo:', err);
   process.exit(1);
 });

@@ -53,6 +53,44 @@ export interface ListNotificacionesParams {
   pageSize?: number;
 }
 
+export interface EntradaPayload {
+  id: number;
+  caratulaExpediente: string;
+  claveExpediente: string;
+  tipoEvento: string;
+  fechaFirma: number;
+}
+
+export interface EntradaLink {
+  app: string;
+  url: string;
+}
+
+export interface Entrada {
+  id: number;
+  fechaCreacion: number;
+  fechaAccion: number;
+  tipo: string;
+  categoria: string;
+  link: EntradaLink;
+  hasDocument: boolean;
+  payload: EntradaPayload;
+}
+
+export interface EntradasPage {
+  items: Entrada[];
+  hasNext: boolean;
+  numberOfItems: number;
+  pageSize: number;
+  page: number;
+}
+
+export interface ListEntradasParams {
+  categoria?: string;
+  page?: number;
+  pageSize?: number;
+}
+
 export interface KeycloakTokenResponse {
   access_token: string;
   expires_in: number;

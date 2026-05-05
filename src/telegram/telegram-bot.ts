@@ -19,6 +19,14 @@ export interface NotificationMessage {
   urgente?: boolean;
 }
 
+export interface EntradaMessage {
+  expedienteClave: string;
+  caratula: string;
+  fecha: Date;
+  tipoEvento: string;
+  link?: string;
+}
+
 export interface TelegramSendResult {
   success: boolean;
   messageId?: number;
@@ -234,6 +242,63 @@ Por ahora, puedes revisar los logs del sistema para ver la actividad.`);
       logger.error('Error al enviar notificación con PDF por Telegram:', error);
       return { success: false, error: (error as Error).toString() };
     }
+  }
+
+  async enviarEntradaConPdf(
+    entrada: EntradaMessage,
+    pdf: { buffer: Buffer; filename: string }
+  ): Promise<TelegramSendResult> {
+    try {
+      if (!this.isInitialized) {
+        throw new Error('Bot no inicializado');
+      }
+      const caption = this.formatearMensajeEntrada(entrada);
+      const sent = await this.bot.telegram.sendDocument(
+        this.config.chatId,
+        { source: pdf.buffer, filename: pdf.filename },
+        { caption, parse_mode: 'HTML' }
+      );
+      return { success: true, messageId: sent.message_id };
+    } catch (error) {
+      logger.error('Error al enviar entrada con PDF por Telegram:', error);
+      return { success: false, error: (error as Error).toString() };
+    }
+  }
+
+  async enviarEntrada(entrada: EntradaMessage): Promise<TelegramSendResult> {
+    try {
+      if (!this.isInitialized) {
+        throw new Error('Bot no inicializado');
+      }
+      const mensaje = this.formatearMensajeEntrada(entrada);
+      const sent = await this.bot.telegram.sendMessage(
+        this.config.chatId,
+        mensaje,
+        { parse_mode: 'HTML' }
+      );
+      return { success: true, messageId: sent.message_id };
+    } catch (error) {
+      logger.error('Error al enviar entrada por Telegram:', error);
+      return { success: false, error: (error as Error).toString() };
+    }
+  }
+
+  private formatearMensajeEntrada(entrada: EntradaMessage): string {
+    const fecha = dayjs(entrada.fecha).utc().utcOffset(-3).format('DD/MM/YYYY HH:mm');
+    const tipoCap = entrada.tipoEvento
+      ? entrada.tipoEvento.charAt(0).toUpperCase() + entrada.tipoEvento.slice(1)
+      : 'Evento';
+    let mensaje = `📥 <b>NUEVA ENTRADA</b>
+
+📋 <b>Expediente:</b> <code>${this.escaparHTML(entrada.expedienteClave)}</code>
+📄 <b>Carátula:</b> ${this.escaparHTML(entrada.caratula)}
+🗂️ <b>Tipo:</b> ${this.escaparHTML(tipoCap)}
+📅 <b>Fecha:</b> ${fecha}`;
+    if (entrada.link) {
+      mensaje += `\n🔗 <a href="${this.escaparHTML(entrada.link)}">Ver en SCW</a>`;
+    }
+    mensaje += `\n\n🤖 <i>Entrada del Portal PJN</i>`;
+    return mensaje;
   }
 
   /**

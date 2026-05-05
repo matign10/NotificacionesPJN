@@ -1,6 +1,22 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { logger } from '../config';
-import { Notificacion } from '../pjn-api/types';
+import { Entrada, Notificacion } from '../pjn-api/types';
+
+export interface EntradaApiRow {
+  entrada_id: number;
+  expediente_caratula: string;
+  expediente_clave: string;
+  fecha_accion: string;
+  fecha_creacion: string;
+  tipo: string;
+  categoria: string;
+  link_url: string | null;
+  has_document: boolean;
+  enviada: boolean;
+  fecha_envio: string | null;
+  raw: Entrada;
+  created_at: string;
+}
 
 export interface NotificacionApiRow {
   notificacion_id: number;
@@ -16,6 +32,7 @@ export interface NotificacionApiRow {
 }
 
 const TABLE = 'notificaciones_api';
+const ENTRADAS_TABLE = 'entradas_api';
 
 export class NotificacionesApiRepo {
   private client: SupabaseClient;
@@ -102,6 +119,46 @@ export class NotificacionesApiRepo {
       .from('kv_config')
       .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' });
     if (error) throw error;
+  }
+
+  async insertEntradaIfMissing(entrada: Entrada): Promise<boolean> {
+    const row = {
+      entrada_id: entrada.id,
+      expediente_caratula: entrada.payload?.caratulaExpediente ?? '(sin carátula)',
+      expediente_clave: entrada.payload?.claveExpediente ?? '',
+      fecha_accion: new Date(entrada.fechaAccion).toISOString(),
+      fecha_creacion: new Date(entrada.fechaCreacion).toISOString(),
+      tipo: entrada.tipo,
+      categoria: entrada.categoria,
+      link_url: entrada.link?.url ?? null,
+      has_document: !!entrada.hasDocument,
+      enviada: false,
+      raw: entrada,
+    };
+    const { error } = await this.client.from(ENTRADAS_TABLE).insert(row);
+    if (error) {
+      if (error.code === '23505') return false;
+      throw error;
+    }
+    return true;
+  }
+
+  async markEntradaSent(id: number): Promise<void> {
+    const { error } = await this.client
+      .from(ENTRADAS_TABLE)
+      .update({ enviada: true, fecha_envio: new Date().toISOString() })
+      .eq('entrada_id', id);
+    if (error) throw error;
+  }
+
+  async getEntradasPendientes(): Promise<EntradaApiRow[]> {
+    const { data, error } = await this.client
+      .from(ENTRADAS_TABLE)
+      .select('*')
+      .eq('enviada', false)
+      .order('fecha_accion', { ascending: true });
+    if (error) throw error;
+    return (data ?? []) as EntradaApiRow[];
   }
 
   async getStats(): Promise<{ total: number; pendientes: number; enviadas: number }> {

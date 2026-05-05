@@ -26,9 +26,8 @@ async function main() {
 
 ${result.success ? '✅' : '❌'} Estado: ${result.success ? 'EXITOSA' : 'CON ERRORES'}
 ⏱️  Duración: ${result.duracionMs}ms
-📋 Total notificaciones API: ${result.total}
-🆕 Nuevas: ${result.nuevas}
-📱 Enviadas a Telegram: ${result.enviadas}
+🔔 Notificaciones — total=${result.total} nuevas=${result.nuevas} enviadas=${result.enviadas}
+📥 Entradas        — total=${result.totalEntradas} nuevas=${result.nuevasEntradas} enviadas=${result.enviadasEntradas}
     `);
     if (result.errores.length > 0) {
       console.log('❌ Errores:');

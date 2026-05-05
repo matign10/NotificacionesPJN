@@ -1,7 +1,8 @@
 import { logger } from '../config';
 import { KeycloakClient } from '../pjn-api/keycloak';
 import { NotificacionesClient } from '../pjn-api/notificaciones';
-import { Notificacion } from '../pjn-api/types';
+import { EventosClient } from '../pjn-api/eventos';
+import { Entrada, Notificacion } from '../pjn-api/types';
 import { NotificacionesApiRepo } from '../database/notificaciones-api-repo';
 import { TelegramBot } from '../telegram/telegram-bot';
 
@@ -17,21 +18,24 @@ export interface ApiMonitorResult {
   total: number;
   nuevas: number;
   enviadas: number;
+  totalEntradas: number;
+  nuevasEntradas: number;
+  enviadasEntradas: number;
   errores: string[];
   duracionMs: number;
 }
 
 export class ApiMonitor {
-  private keycloak: KeycloakClient | null = null;
+  private keycloakSne: KeycloakClient | null = null;
+  private keycloakPortal: KeycloakClient | null = null;
   private notifs: NotificacionesClient | null = null;
+  private eventos: EventosClient | null = null;
   private repo: NotificacionesApiRepo;
   private telegram: TelegramBot | null = null;
   private cfg: ApiMonitorConfig;
   private telegramReady = false;
-  private clientId: string;
 
   constructor(cfg?: Partial<ApiMonitorConfig>) {
-    this.clientId = process.env.PJN_CLIENT_ID || 'pjn-sne';
     this.repo = new NotificacionesApiRepo();
 
     this.cfg = {
@@ -43,32 +47,38 @@ export class ApiMonitor {
     };
   }
 
+  private async buildKeycloak(clientId: string, kvKey: string, label: string): Promise<KeycloakClient | null> {
+    const stored = await this.repo.getConfig(kvKey);
+    if (!stored) {
+      logger.warn(`No hay refresh_token persistido para ${label} (kv_config:${kvKey}). El flujo de ${label} se omite hasta que corras bootstrap:token.`);
+      return null;
+    }
+    return new KeycloakClient({
+      clientId,
+      refreshToken: stored,
+      onRefresh: async (newRT) => {
+        await this.repo.setConfig(kvKey, newRT);
+        logger.info(`refresh_token (${label}) rotado y persistido.`);
+      },
+    });
+  }
+
   async initialize(): Promise<void> {
     logger.info('Inicializando ApiMonitor...');
     await this.repo.ping();
 
-    // El RT de Keycloak rota en cada refresh y tiene TTL corto; lo guardamos
-    // en kv_config y lo actualizamos automáticamente.
-    const stored = await this.repo.getConfig('pjn_refresh_token');
-    const initial = stored || process.env.PJN_REFRESH_TOKEN;
-    if (!initial) {
-      throw new Error('No hay refresh_token: ni en Supabase (kv_config) ni en PJN_REFRESH_TOKEN. Corré `npm run bootstrap:token`.');
-    }
-    if (stored) {
-      logger.info('Usando refresh_token persistido en Supabase.');
-    } else {
-      logger.info('Usando refresh_token del entorno (será migrado a Supabase tras el primer refresh).');
+    // Dos clients distintos en Keycloak: pjn-sne para notificaciones y
+    // pjn-portal para eventos/entradas. Cada uno tiene su propio
+    // refresh_token, que rota en cada uso.
+    this.keycloakSne = await this.buildKeycloak('pjn-sne', 'pjn_refresh_token_sne', 'notif');
+    this.keycloakPortal = await this.buildKeycloak('pjn-portal', 'pjn_refresh_token_portal', 'portal');
+
+    if (!this.keycloakSne && !this.keycloakPortal) {
+      throw new Error('No hay refresh_token para ningún client en Supabase. Corré `npm run bootstrap:token`.');
     }
 
-    this.keycloak = new KeycloakClient({
-      clientId: this.clientId,
-      refreshToken: initial,
-      onRefresh: async (newRT) => {
-        await this.repo.setConfig('pjn_refresh_token', newRT);
-        logger.info('refresh_token rotado y persistido.');
-      },
-    });
-    this.notifs = new NotificacionesClient(this.keycloak);
+    if (this.keycloakSne) this.notifs = new NotificacionesClient(this.keycloakSne);
+    if (this.keycloakPortal) this.eventos = new EventosClient(this.keycloakPortal);
 
     if (this.cfg.enableTelegramNotifications) {
       this.telegram = new TelegramBot();
@@ -85,6 +95,9 @@ export class ApiMonitor {
       total: 0,
       nuevas: 0,
       enviadas: 0,
+      totalEntradas: 0,
+      nuevasEntradas: 0,
+      enviadasEntradas: 0,
       errores: [],
       duracionMs: 0,
     };
@@ -94,8 +107,11 @@ export class ApiMonitor {
       const fechaDesde = new Date();
       fechaDesde.setDate(fechaDesde.getDate() - this.cfg.lookbackDays);
 
+      if (!this.notifs) {
+        logger.info('Skipping notificaciones (sin RT de pjn-sne).');
+      } else {
       logger.info(`Listando notificaciones RECIBIDAS (lookback ${this.cfg.lookbackDays}d)...`);
-      const items = await this.notifs!.listAll({
+      const items = await this.notifs.listAll({
         bandeja: 'RECIBIDAS',
         fechaDesde,
         fechaHasta,
@@ -134,6 +150,49 @@ export class ApiMonitor {
         }
       }
 
+      }
+
+      if (!this.eventos) {
+        logger.info('Skipping entradas (sin RT de pjn-portal). Corré bootstrap:token.');
+      } else {
+      logger.info('Listando entradas (eventos judicial)...');
+      const entradas = await this.eventos.listAll({
+        categoria: 'judicial',
+        pageSize: this.cfg.pageSize,
+      });
+      result.totalEntradas = entradas.length;
+      logger.info(`API devolvió ${entradas.length} entradas`);
+
+      const nuevasEntradas: Entrada[] = [];
+      for (const e of entradas) {
+        try {
+          const inserted = await this.repo.insertEntradaIfMissing(e);
+          if (inserted) nuevasEntradas.push(e);
+        } catch (err) {
+          const msg = `Error al persistir entrada ${e.id}: ${(err as Error).message}`;
+          logger.error(msg);
+          result.errores.push(msg);
+        }
+      }
+      result.nuevasEntradas = nuevasEntradas.length;
+      logger.info(`Nuevas entradas para procesar: ${nuevasEntradas.length}`);
+
+      const entradasPendientes = await this.repo.getEntradasPendientes();
+      logger.info(`Total entradas pendientes (incluyendo previas): ${entradasPendientes.length}`);
+
+      for (const row of entradasPendientes) {
+        try {
+          await this.procesarEntradaPendiente(row.entrada_id, row.raw);
+          result.enviadasEntradas++;
+        } catch (err) {
+          const msg = `Error procesando entrada ${row.entrada_id}: ${(err as Error).message}`;
+          logger.error(msg);
+          result.errores.push(msg);
+        }
+      }
+
+      }
+
       result.success = result.errores.length === 0;
     } catch (err) {
       const msg = `Error fatal: ${(err as Error).message}`;
@@ -142,7 +201,10 @@ export class ApiMonitor {
     } finally {
       result.duracionMs = Date.now() - start;
       logger.info(
-        `Run finalizado en ${result.duracionMs}ms. total=${result.total} nuevas=${result.nuevas} enviadas=${result.enviadas} errores=${result.errores.length}`
+        `Run finalizado en ${result.duracionMs}ms. ` +
+        `notif total=${result.total} nuevas=${result.nuevas} enviadas=${result.enviadas} | ` +
+        `entradas total=${result.totalEntradas} nuevas=${result.nuevasEntradas} enviadas=${result.enviadasEntradas} | ` +
+        `errores=${result.errores.length}`
       );
     }
 
@@ -178,6 +240,48 @@ export class ApiMonitor {
 
     await this.repo.markSent(id);
     logger.info(`Notificación ${id} (${notif.expediente.numeracion}) enviada y marcada.`);
+  }
+
+  private async procesarEntradaPendiente(id: number, entrada: Entrada): Promise<void> {
+    if (!this.telegramReady || !this.telegram) {
+      logger.info(`Telegram deshabilitado, marcando entrada ${id} como enviada igual.`);
+      await this.repo.markEntradaSent(id);
+      return;
+    }
+
+    const link = entrada.link?.app === 'pjn-scw'
+      ? `https://scw.pjn.gov.ar${entrada.link.url}`
+      : entrada.link?.url;
+
+    const mensaje = {
+      expedienteClave: entrada.payload?.claveExpediente ?? '',
+      caratula: entrada.payload?.caratulaExpediente ?? '(sin carátula)',
+      fecha: new Date(entrada.fechaAccion),
+      tipoEvento: entrada.tipo,
+      link,
+    };
+
+    if (this.cfg.attachPdf && entrada.hasDocument) {
+      try {
+        const pdf = await this.eventos!.getPdf(id);
+        const filename = `entrada-${id}.pdf`;
+        const sent = await this.telegram.enviarEntradaConPdf(mensaje, { buffer: pdf, filename });
+        if (!sent.success) {
+          throw new Error(`Telegram sendDocument falló: ${sent.error}`);
+        }
+      } catch (err) {
+        // Si el PDF falla, mandamos al menos el mensaje en texto para no perder el aviso.
+        logger.warn(`PDF de entrada ${id} no disponible (${(err as Error).message}), enviando solo texto.`);
+        const sent = await this.telegram.enviarEntrada(mensaje);
+        if (!sent.success) throw new Error(`Telegram sendMessage falló: ${sent.error}`);
+      }
+    } else {
+      const sent = await this.telegram.enviarEntrada(mensaje);
+      if (!sent.success) throw new Error(`Telegram sendMessage falló: ${sent.error}`);
+    }
+
+    await this.repo.markEntradaSent(id);
+    logger.info(`Entrada ${id} (${entrada.payload?.claveExpediente}) enviada y marcada.`);
   }
 
   async cleanup(): Promise<void> {

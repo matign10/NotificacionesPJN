@@ -1,14 +1,30 @@
 # PJN Notificaciones Monitor — contexto para Claude Code
 
-Monitor automático de notificaciones electrónicas del Poder Judicial de la Nación (Argentina). Corre en GitHub Actions cada 30 min, consume el API interno del portal y manda cada notificación nueva por Telegram con su PDF.
+Monitor automático del PJN. Corre en GitHub Actions cada 25 min y vigila dos cosas en paralelo, en una sola corrida:
+
+1. **Notificaciones** (cédulas formales) en `notif.pjn.gov.ar`
+2. **Entradas / eventos** (despachos, etc.) en `portalpjn.pjn.gov.ar`
+
+Cada notificación o entrada nueva se manda por Telegram con su PDF y un header diferenciado.
 
 ## Arquitectura
 
-- **Auth**: OIDC contra Keycloak (`sso.pjn.gov.ar`, realm `pjn`, client `pjn-sne`). Refresh token con TTL ~30 min, **rota en cada uso** y se persiste en `kv_config` de Supabase.
-- **Lista**: `GET https://notif.pjn.gov.ar/api/notificaciones?bandeja=RECIBIDAS&fechaDesde=DDMMYYYY&fechaHasta=DDMMYYYY&page=N&pageSize=M`
-- **PDF**: `GET https://notif.pjn.gov.ar/api/notificaciones/RECIBIDAS/{id}/pdf` → bytes binarios
-- **Storage**: Supabase Postgres. Tabla `notificaciones_api` con PK = `notificacion_id` (id estable que viene del API). Tabla `kv_config` para persistir el refresh_token rotado.
-- **Notificación**: Telegram via Telegraf (`bot.telegram.sendDocument` con buffer del PDF).
+- **Auth**: OIDC contra Keycloak (`sso.pjn.gov.ar`, realm `pjn`). Dos clients distintos, cada uno con su refresh_token. Los RT tienen TTL ~30 min, **rotan en cada uso** y se persisten en `kv_config`:
+  - `pjn-sne` ↔ `kv_config.pjn_refresh_token_sne` (notificaciones)
+  - `pjn-portal` ↔ `kv_config.pjn_refresh_token_portal` (entradas)
+- **Notificaciones**:
+  - `GET https://notif.pjn.gov.ar/api/notificaciones?bandeja=RECIBIDAS&fechaDesde=DDMMYYYY&fechaHasta=DDMMYYYY&page=N&pageSize=M`
+  - `GET https://notif.pjn.gov.ar/api/notificaciones/RECIBIDAS/{id}/pdf`
+- **Entradas / eventos**:
+  - `GET https://api.pjn.gov.ar/eventos/?page=N&pageSize=M&categoria=judicial`
+  - `GET https://api.pjn.gov.ar/eventos/{id}/pdf` (cuando `hasDocument=true`)
+- **Storage**: Supabase Postgres.
+  - `notificaciones_api` (PK `notificacion_id`)
+  - `entradas_api` (PK `entrada_id`)
+  - `kv_config` (refresh_tokens rotados)
+- **Telegram**: Telegraf, dos formatos:
+  - 🔔 `NUEVA NOTIFICACIÓN JUDICIAL` (PDF de la cédula)
+  - 📥 `NUEVA ENTRADA` (PDF del despacho + link al SCW)
 
 Documento técnico con todos los endpoints y la decisión arquitectónica: [`REVERSE_ENGINEERING.md`](./REVERSE_ENGINEERING.md).
 
@@ -19,7 +35,8 @@ src/
   pjn-api/
     types.ts              # types del shape del API
     keycloak.ts           # refresh OIDC con onRefresh callback
-    notificaciones.ts     # list + getPdf
+    notificaciones.ts     # list + getPdf (client pjn-sne)
+    eventos.ts            # list + getPdf (client pjn-portal)
   monitor/
     api-monitor.ts        # orchestrador: refresh → list → insert → send → mark
   database/
@@ -37,6 +54,7 @@ supabase/
   migrations/
     20260503_notificaciones_api.sql
     20260504_kv_config.sql
+    20260505_entradas_api.sql
 ```
 
 ## Idempotencia y dedup
@@ -64,4 +82,6 @@ Ver `.env.example`. En CI van como GitHub Secrets/vars (workflow lee de `secrets
 
 ## Nota de operación
 
-Si en Supabase `kv_config.pjn_refresh_token` falta o está desactualizado y la sesión Keycloak expiró, el monitor falla con `Keycloak refresh failed (400): Token is not active`. Solución: `npm run bootstrap:token`.
+Si alguno de los dos refresh_tokens en `kv_config` (`pjn_refresh_token_sne`, `pjn_refresh_token_portal`) está caducado, la rama correspondiente falla con `Keycloak refresh failed (400): Token is not active`. Solución: `npm run bootstrap:token` (captura ambos en una sola sesión).
+
+El cron está en `*/25` adrede: el RT tiene TTL 30 min y rota en cada uso; con `*/30` cualquier demora del runner deja la sesión muerta entre corridas.
