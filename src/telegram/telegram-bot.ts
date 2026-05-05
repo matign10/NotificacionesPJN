@@ -244,6 +244,32 @@ Por ahora, puedes revisar los logs del sistema para ver la actividad.`);
     }
   }
 
+  async enviarAlertaSesionMuerta(razon: string): Promise<TelegramSendResult> {
+    try {
+      if (!this.isInitialized) {
+        throw new Error('Bot no inicializado');
+      }
+      const mensaje = `🚨 <b>PJN Monitor — sesión caída</b>
+
+El auto-bootstrap headless no pudo recuperar la sesión Keycloak.
+
+<b>Detalle:</b> ${this.escaparHTML(razon)}
+
+⚠️ Mientras esto siga así no se procesan notificaciones ni entradas nuevas.
+
+<b>Acción:</b> ejecutar manualmente <code>npm run bootstrap:token</code> con tu usuario PJN. Si aparece un captcha, completalo en la ventana del navegador.`;
+      const sent = await this.bot.telegram.sendMessage(
+        this.config.chatId,
+        mensaje,
+        { parse_mode: 'HTML' }
+      );
+      return { success: true, messageId: sent.message_id };
+    } catch (error) {
+      logger.error('No se pudo enviar alerta de sesion muerta:', error);
+      return { success: false, error: (error as Error).toString() };
+    }
+  }
+
   async enviarEntradaConPdf(
     entrada: EntradaMessage,
     pdf: { buffer: Buffer; filename: string }
