@@ -53,8 +53,8 @@ export const config = {
     refreshToken: process.env.PJN_REFRESH_TOKEN || '',
   },
   telegram: {
-    botToken: process.env.TELEGRAM_BOT_TOKEN!,
-    chatId: process.env.TELEGRAM_CHAT_ID!,
+    botToken: (process.env.TELEGRAM_BOT_TOKEN || '').trim().replace(/^["']|["']$/g, ''),
+    chatId: (process.env.TELEGRAM_CHAT_ID || '').trim().replace(/^["']|["']$/g, ''),
   },
   supabase: {
     url: process.env.SUPABASE_URL!,

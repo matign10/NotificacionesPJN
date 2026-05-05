@@ -156,12 +156,17 @@ Por ahora, puedes revisar los logs del sistema para ver la actividad.`);
    * Verifica que el chat configurado sea válido
    */
   private async verificarChat(): Promise<void> {
+    const id = this.config.chatId;
+    const masked = id ? `${id.slice(0, 2)}…${id.slice(-2)} (len=${id.length})` : '(empty)';
     try {
-      const chat = await this.bot.telegram.getChat(this.config.chatId);
+      const chat = await this.bot.telegram.getChat(id);
       logger.info(`Chat verificado: ${chat.type} - ${chat.id}`);
     } catch (error) {
-      logger.error(`Error al verificar chat ${this.config.chatId}:`, error);
-      throw new Error(`Chat ID inválido: ${this.config.chatId}. Verifica que el bot tenga acceso al chat.`);
+      const desc = (error as { response?: { description?: string }; message?: string })?.response?.description
+        ?? (error as Error)?.message
+        ?? String(error);
+      logger.error(`getChat fallo. chatId=${masked}. Telegram dice: ${desc}`);
+      throw new Error(`Chat ID inválido (${masked}): ${desc}`);
     }
   }
 
