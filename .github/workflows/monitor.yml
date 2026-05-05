@@ -2,8 +2,10 @@ name: PJN Monitor - Verificación Automática
 
 on:
   schedule:
-    # Ejecutar cada 30 minutos
-    - cron: '*/30 * * * *'
+    # Ejecutar cada 25 minutos: el refresh_token de Keycloak tiene TTL de
+    # 30 min y rota en cada uso. Si dejamos */30, una demora minima del
+    # runner hace que el RT expire entre corridas y se pierda la sesion.
+    - cron: '*/25 * * * *'
   workflow_dispatch: # Permite ejecutar manualmente desde GitHub
   push:
     branches: [ main, master ] # Para testing inicial
@@ -21,7 +23,7 @@ jobs:
     - name: Configurar Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '18'
+        node-version: '20'
         cache: 'npm'
     
     - name: Instalar dependencias
