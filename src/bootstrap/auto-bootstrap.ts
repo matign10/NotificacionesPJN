@@ -1,6 +1,28 @@
 import { chromium, BrowserContext, Page } from 'playwright';
+import * as fs from 'fs';
+import * as path from 'path';
 import { logger } from '../config';
 import { NotificacionesApiRepo } from '../database/notificaciones-api-repo';
+
+const LOGS_DIR = path.join(process.cwd(), 'logs');
+function ensureLogsDir(): string {
+  if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
+  return LOGS_DIR;
+}
+
+async function dumpPage(page: Page, label: string): Promise<void> {
+  try {
+    const dir = ensureLogsDir();
+    const safe = label.replace(/[^a-z0-9_-]+/gi, '_').slice(0, 60);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    await page.screenshot({ path: path.join(dir, `bootstrap-${safe}-${ts}.png`), fullPage: true });
+    const html = await page.content().catch(() => '');
+    fs.writeFileSync(path.join(dir, `bootstrap-${safe}-${ts}.html`), html);
+    logger.info(`Diagnostico: dump guardado para ${label}. URL=${page.url()} title="${await page.title().catch(() => '')}"`);
+  } catch (err) {
+    logger.warn(`No se pudo dumpear pagina ${label}: ${(err as Error).message}`);
+  }
+}
 
 interface AppTarget {
   label: string;
@@ -35,10 +57,34 @@ export interface BootstrapOptions {
 }
 
 async function autoLogin(page: Page, username: string, password: string): Promise<void> {
+  logger.info(`autoLogin: esperando form. URL=${page.url()}`);
   await page.waitForSelector('input[name="username"], input[id="username"]', { timeout: 30_000 });
   await page.locator('input[name="username"], input[id="username"]').first().fill(username);
   await page.locator('input[name="password"], input[id="password"]').first().fill(password);
-  await page.locator('button[type="submit"], input[type="submit"]').first().click();
+  logger.info(`autoLogin: enviando credenciales`);
+  await Promise.all([
+    page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => undefined),
+    page.locator('button[type="submit"], input[type="submit"]').first().click(),
+  ]);
+  // Captura mensajes de error tipicos de Keycloak (usuario/clave invalido,
+  // captcha, cuenta bloqueada).
+  const possibleErrorSelectors = [
+    '#input-error',
+    '.kc-feedback-text',
+    '.alert-error',
+    '.pf-c-alert__title',
+    '[class*="error"]',
+  ];
+  for (const sel of possibleErrorSelectors) {
+    const el = page.locator(sel).first();
+    if ((await el.count()) > 0) {
+      const text = (await el.textContent().catch(() => null))?.trim();
+      if (text) {
+        logger.warn(`autoLogin: mensaje del form (${sel}): ${text}`);
+      }
+    }
+  }
+  logger.info(`autoLogin: tras submit URL=${page.url()}`);
 }
 
 async function captureRt(
@@ -81,7 +127,10 @@ async function captureRt(
       if (raw) break;
       await page.waitForTimeout(POLL_MS);
     }
-    if (!raw) throw new Error(`Timeout esperando token de ${target.label}.`);
+    if (!raw) {
+      await dumpPage(page, `timeout-${target.kvKey}`);
+      throw new Error(`Timeout esperando token de ${target.label}. Ver logs/ para screenshot.`);
+    }
 
     const oidc = JSON.parse(raw);
     const rt: string | undefined = oidc.refresh_token;
@@ -106,10 +155,16 @@ export async function runBootstrap(opts: BootstrapOptions = {}): Promise<Record<
 
   logger.info(`Bootstrap: modo=${autoCreds ? 'auto' : 'manual'} headless=${headless}`);
 
-  const browser = await chromium.launch({ headless });
+  const browser = await chromium.launch({
+    headless,
+    args: ['--disable-blink-features=AutomationControlled'],
+  });
   const context = await browser.newContext({
     locale: 'es-AR',
     timezoneId: 'America/Argentina/Buenos_Aires',
+    userAgent:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    viewport: { width: 1366, height: 768 },
   });
 
   const tokens: Record<string, string> = {};
