@@ -135,6 +135,8 @@ export async function runBootstrap(opts: BootstrapOptions = {}): Promise<Record<
 }
 
 export function isSessionDeadError(err: unknown): boolean {
-  const msg = (err as Error)?.message ?? '';
+  const msg = typeof err === 'string'
+    ? err
+    : (err as Error)?.message ?? String(err ?? '');
   return /Token is not active|invalid_grant/i.test(msg);
 }

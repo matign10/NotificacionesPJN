@@ -508,7 +508,13 @@ ${contexto ? `🔍 <b>Contexto:</b> ${this.escaparHTML(contexto)}` : ''}
       this.bot.stop();
       logger.info('Bot de Telegram detenido');
     } catch (error) {
-      logger.error('Error al detener bot de Telegram:', error);
+      // El bot solo corre en modo polling cuando se llama iniciarBot();
+      // en check:now lo usamos solo para sendMessage/sendDocument y stop()
+      // tira "Bot is not running!" — es benigno, lo silenciamos.
+      const msg = (error as Error)?.message ?? '';
+      if (!/Bot is not running/i.test(msg)) {
+        logger.error('Error al detener bot de Telegram:', error);
+      }
     }
   }
 
