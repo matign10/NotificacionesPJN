@@ -95,8 +95,17 @@ async function captureRt(
   const page = await context.newPage();
   try {
     await page.goto(target.url, { waitUntil: 'domcontentloaded' });
+    // Esperar a que la cadena de redirects del SSO termine antes de
+    // decidir si la pagina es de login o estamos ya autenticados.
+    await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => undefined);
 
-    const isLoginPage = (await page.locator('input[name="username"], input[id="username"]').count()) > 0;
+    // Deteccion robusta: si la URL es la del endpoint de auth de Keycloak,
+    // es la pagina de login si o si — independiente de si el form ya
+    // renderizo. Si no, fallback al chequeo de input.
+    const onLoginUrl = /\/auth\/realms\/pjn\/protocol\/openid-connect\/auth/.test(page.url());
+    const inputCount = await page.locator('input[name="username"], input[id="username"]').count();
+    const isLoginPage = onLoginUrl || inputCount > 0;
+    logger.info(`captureRt(${target.label}): URL=${page.url()} onLoginUrl=${onLoginUrl} inputCount=${inputCount} -> isLoginPage=${isLoginPage}`);
     if (isLoginPage) {
       if (autoCreds) {
         try {
