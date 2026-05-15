@@ -39,9 +39,9 @@ export class NotificacionesApiRepo {
 
   constructor() {
     const url = process.env.SUPABASE_URL;
-    const key = process.env.SUPABASE_ANON_KEY;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !key) {
-      throw new Error('Faltan SUPABASE_URL y/o SUPABASE_ANON_KEY en el entorno.');
+      throw new Error('Faltan SUPABASE_URL y/o SUPABASE_SERVICE_ROLE_KEY en el entorno.');
     }
     this.client = createClient(url, key);
   }

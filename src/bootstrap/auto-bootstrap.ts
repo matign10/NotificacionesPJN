@@ -187,7 +187,7 @@ export async function runBootstrap(opts: BootstrapOptions = {}): Promise<Record<
     await browser.close();
   }
 
-  if (persist && process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
+  if (persist && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
     const repo = new NotificacionesApiRepo();
     for (const [key, value] of Object.entries(tokens)) {
       await repo.setConfig(key, value);

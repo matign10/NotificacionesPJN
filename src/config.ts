@@ -34,7 +34,7 @@ export function checkConfig(): boolean {
     'TELEGRAM_BOT_TOKEN',
     'TELEGRAM_CHAT_ID',
     'SUPABASE_URL',
-    'SUPABASE_ANON_KEY',
+    'SUPABASE_SERVICE_ROLE_KEY',
   ];
 
   const missing = required.filter((key) => !process.env[key]);
@@ -58,7 +58,7 @@ export const config = {
   },
   supabase: {
     url: process.env.SUPABASE_URL!,
-    anonKey: process.env.SUPABASE_ANON_KEY!,
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
   },
   app: {
     checkIntervalMinutes: parseInt(process.env.CHECK_INTERVAL_MINUTES || '30', 10),

@@ -34,7 +34,7 @@ Detalle de los endpoints y la decisión de migrar del scraper Playwright al API 
    ```
 
 4. `.env` local — copiar de `.env.example` y completar:
-   - `SUPABASE_URL`, `SUPABASE_ANON_KEY`
+   - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
    - `TELEGRAM_BOT_TOKEN` (de @BotFather), `TELEGRAM_CHAT_ID`
    - Opcional: `PJN_USERNAME`, `PJN_PASSWORD` (sólo para auto-login en el bootstrap)
 
@@ -52,7 +52,7 @@ Detalle de los endpoints y la decisión de migrar del scraper Playwright al API 
 ## Deploy en GitHub Actions
 
 Subir como **Repository secrets** (Settings → Secrets and variables → Actions):
-- `SUPABASE_URL`, `SUPABASE_ANON_KEY`
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
 - `PJN_CLIENT_ID` = `pjn-sne`
 - `PJN_REFRESH_TOKEN` (opcional; se rota a Supabase tras la primera corrida)
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
