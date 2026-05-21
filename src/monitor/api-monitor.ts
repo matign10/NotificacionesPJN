@@ -5,6 +5,7 @@ import { EventosClient } from '../pjn-api/eventos';
 import { Entrada, Notificacion } from '../pjn-api/types';
 import { NotificacionesApiRepo } from '../database/notificaciones-api-repo';
 import { TelegramBot } from '../telegram/telegram-bot';
+import { PjnUser, rtKeySne, rtKeyPortal } from '../users';
 
 export interface ApiMonitorConfig {
   lookbackDays: number;
@@ -34,9 +35,11 @@ export class ApiMonitor {
   private telegram: TelegramBot | null = null;
   private cfg: ApiMonitorConfig;
   private telegramReady = false;
+  private user: PjnUser;
 
-  constructor(cfg?: Partial<ApiMonitorConfig>) {
-    this.repo = new NotificacionesApiRepo();
+  constructor(user: PjnUser, cfg?: Partial<ApiMonitorConfig>) {
+    this.user = user;
+    this.repo = new NotificacionesApiRepo(user.id);
 
     this.cfg = {
       lookbackDays: parseInt(process.env.LOOKBACK_DAYS || '60', 10),
@@ -64,28 +67,32 @@ export class ApiMonitor {
   }
 
   async initialize(): Promise<void> {
-    logger.info('Inicializando ApiMonitor...');
+    logger.info(`Inicializando ApiMonitor para usuario "${this.user.id}"...`);
     await this.repo.ping();
 
     // Dos clients distintos en Keycloak: pjn-sne para notificaciones y
     // pjn-portal para eventos/entradas. Cada uno tiene su propio
-    // refresh_token, que rota en cada uso.
-    this.keycloakSne = await this.buildKeycloak('pjn-sne', 'pjn_refresh_token_sne', 'notif');
-    this.keycloakPortal = await this.buildKeycloak('pjn-portal', 'pjn_refresh_token_portal', 'portal');
+    // refresh_token, que rota en cada uso. Las keys en kv_config están
+    // namespaceadas por usuario.
+    this.keycloakSne = await this.buildKeycloak('pjn-sne', rtKeySne(this.user.id), 'notif');
+    this.keycloakPortal = await this.buildKeycloak('pjn-portal', rtKeyPortal(this.user.id), 'portal');
 
     if (!this.keycloakSne && !this.keycloakPortal) {
-      throw new Error('No hay refresh_token para ningún client en Supabase. Corré `npm run bootstrap:token`.');
+      throw new Error(`No hay refresh_token para el usuario "${this.user.id}" en Supabase. Corré bootstrap:token.`);
     }
 
     if (this.keycloakSne) this.notifs = new NotificacionesClient(this.keycloakSne);
     if (this.keycloakPortal) this.eventos = new EventosClient(this.keycloakPortal);
 
     if (this.cfg.enableTelegramNotifications) {
-      this.telegram = new TelegramBot();
+      this.telegram = new TelegramBot({
+        botToken: this.user.telegramBotToken,
+        chatId: this.user.telegramChatId,
+      });
       await this.telegram.initialize();
       this.telegramReady = true;
     }
-    logger.info('ApiMonitor listo');
+    logger.info(`ApiMonitor listo para "${this.user.id}"`);
   }
 
   async run(): Promise<ApiMonitorResult> {

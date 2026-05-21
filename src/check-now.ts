@@ -1,11 +1,13 @@
 /**
  * Verificación inmediata. Usado por GitHub Actions y para pruebas manuales.
  *
- * Si la sesion Keycloak quedo invalidada (p.ej. el usuario se logueo manual
- * en otro browser), corremos automaticamente el bootstrap headless con
- * PJN_USERNAME/PJN_PASSWORD y reintentamos una sola vez. Si tambien eso
- * falla (captcha, MFA, password cambiado, etc.) mandamos UNA alerta por
- * Telegram cada 6 horas para que el usuario corra bootstrap manual.
+ * Multi-usuario: itera sobre cada usuario PJN definido en PJN_USERS (o el
+ * usuario único legacy). Cada usuario corre aislado en su propio try/catch
+ * con su propio bot de Telegram, así un fallo de uno no frena a los demás.
+ *
+ * Si la sesión Keycloak de un usuario quedó invalidada, corremos su
+ * auto-bootstrap headless (con sus PJN_USERNAME/PJN_PASSWORD) y reintentamos
+ * una vez. Si tampoco funciona, mandamos UNA alerta por su Telegram cada 6h.
  */
 
 import dayjs from 'dayjs';
@@ -14,15 +16,13 @@ import { ApiMonitor, ApiMonitorResult } from './monitor/api-monitor';
 import { isSessionDeadError, runBootstrap } from './bootstrap/auto-bootstrap';
 import { NotificacionesApiRepo } from './database/notificaciones-api-repo';
 import { TelegramBot } from './telegram/telegram-bot';
+import { loadUsers, alertKey, PjnUser } from './users';
 import { logger } from './config';
 
-dotenv.config();
-
-const ALERT_KV_KEY = 'last_session_dead_alert_at';
 const ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6h
 
-async function runOnce(): Promise<{ result: ApiMonitorResult; sessionDead: boolean }> {
-  const monitor = new ApiMonitor();
+async function runOnce(user: PjnUser): Promise<{ result: ApiMonitorResult; sessionDead: boolean }> {
+  const monitor = new ApiMonitor(user);
   try {
     await monitor.initialize();
     const result = await monitor.run();
@@ -33,83 +33,101 @@ async function runOnce(): Promise<{ result: ApiMonitorResult; sessionDead: boole
   }
 }
 
-async function tryAlertSessionDead(reason: string): Promise<void> {
+async function tryAlertSessionDead(user: PjnUser, reason: string): Promise<void> {
   if (process.env.DISABLE_TELEGRAM === 'true') return;
-  if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) return;
 
   try {
-    const repo = new NotificacionesApiRepo();
-    const lastRaw = await repo.getConfig(ALERT_KV_KEY);
+    const repo = new NotificacionesApiRepo(user.id);
+    const key = alertKey(user.id);
+    const lastRaw = await repo.getConfig(key);
     const last = lastRaw ? Number(lastRaw) : 0;
     const now = Date.now();
     if (now - last < ALERT_COOLDOWN_MS) {
-      logger.info(`Alerta sesion muerta silenciada por ratelimit (ultima hace ${Math.round((now - last) / 60000)} min).`);
+      logger.info(`[${user.id}] Alerta sesión muerta silenciada por ratelimit (última hace ${Math.round((now - last) / 60000)} min).`);
       return;
     }
 
-    const bot = new TelegramBot();
+    const bot = new TelegramBot({ botToken: user.telegramBotToken, chatId: user.telegramChatId });
     await bot.initialize();
     await bot.enviarAlertaSesionMuerta(reason);
     await bot.detenerBot().catch(() => undefined);
-    await repo.setConfig(ALERT_KV_KEY, String(now));
-    logger.info('Alerta de sesion muerta enviada por Telegram.');
+    await repo.setConfig(key, String(now));
+    logger.info(`[${user.id}] Alerta de sesión muerta enviada por Telegram.`);
   } catch (err) {
-    logger.error(`No se pudo enviar alerta de sesion muerta: ${(err as Error).message}`);
+    logger.error(`[${user.id}] No se pudo enviar alerta de sesión muerta: ${(err as Error).message}`);
   }
 }
 
-async function main() {
-  console.log(`
-╔════════════════════════════════════════╗
-║     PJN - VERIFICACIÓN MANUAL          ║
-║     ${dayjs().format('DD/MM/YYYY HH:mm:ss')}          ║
-╚════════════════════════════════════════╝
-  `);
-
-  let { result, sessionDead } = await runOnce();
+async function procesarUsuario(user: PjnUser): Promise<ApiMonitorResult> {
+  logger.info(`===== Usuario "${user.id}" =====`);
+  let { result, sessionDead } = await runOnce(user);
   let recoveryFailed = false;
   let recoveryReason = '';
 
-  if (sessionDead && process.env.PJN_USERNAME && process.env.PJN_PASSWORD) {
-    logger.warn('Sesion Keycloak invalidada. Disparando auto-bootstrap headless...');
+  if (sessionDead && user.pjnUsername && user.pjnPassword) {
+    logger.warn(`[${user.id}] Sesión Keycloak invalidada. Disparando auto-bootstrap headless...`);
     try {
-      await runBootstrap({ headless: true });
-      logger.info('Auto-bootstrap OK. Reintentando corrida...');
-      ({ result, sessionDead } = await runOnce());
+      await runBootstrap({ userId: user.id, username: user.pjnUsername, password: user.pjnPassword, headless: true });
+      logger.info(`[${user.id}] Auto-bootstrap OK. Reintentando corrida...`);
+      ({ result, sessionDead } = await runOnce(user));
       if (sessionDead) {
         recoveryFailed = true;
-        recoveryReason = 'Auto-bootstrap completo pero la sesion siguio invalidada al reintentar.';
+        recoveryReason = 'Auto-bootstrap completo pero la sesión siguió invalidada al reintentar.';
       }
     } catch (err) {
       recoveryFailed = true;
-      recoveryReason = `Auto-bootstrap fallo: ${(err as Error).message}`;
-      logger.error(recoveryReason);
+      recoveryReason = `Auto-bootstrap falló: ${(err as Error).message}`;
+      logger.error(`[${user.id}] ${recoveryReason}`);
       result.errores.push(recoveryReason);
       result.success = false;
     }
   } else if (sessionDead) {
     recoveryFailed = true;
-    recoveryReason = 'Sesion muerta y faltan PJN_USERNAME/PJN_PASSWORD para auto-recovery.';
-    logger.error(recoveryReason);
+    recoveryReason = 'Sesión muerta y faltan pjnUsername/pjnPassword para auto-recovery.';
+    logger.error(`[${user.id}] ${recoveryReason}`);
   }
 
   if (recoveryFailed) {
-    await tryAlertSessionDead(recoveryReason);
+    await tryAlertSessionDead(user, recoveryReason);
   }
 
   console.log(`
-📊 RESULTADOS
-
-${result.success ? '✅' : '❌'} Estado: ${result.success ? 'EXITOSA' : 'CON ERRORES'}
-⏱️  Duración: ${result.duracionMs}ms
+📊 [${user.id}] ${result.success ? '✅ EXITOSA' : '❌ CON ERRORES'} — ${result.duracionMs}ms
 🔔 Notificaciones — total=${result.total} nuevas=${result.nuevas} enviadas=${result.enviadas}
-📥 Entradas        — total=${result.totalEntradas} nuevas=${result.nuevasEntradas} enviadas=${result.enviadasEntradas}
-    `);
+📥 Entradas        — total=${result.totalEntradas} nuevas=${result.nuevasEntradas} enviadas=${result.enviadasEntradas}`);
   if (result.errores.length > 0) {
-    console.log('❌ Errores:');
+    console.log(`❌ [${user.id}] Errores:`);
     result.errores.forEach((e, i) => console.log(`  ${i + 1}. ${e}`));
   }
-  process.exit(result.success ? 0 : 1);
+
+  return result;
+}
+
+async function main() {
+  console.log(`
+╔════════════════════════════════════════╗
+║     PJN - VERIFICACIÓN MULTI-USUARIO   ║
+║     ${dayjs().format('DD/MM/YYYY HH:mm:ss')}          ║
+╚════════════════════════════════════════╝
+  `);
+
+  const users = loadUsers();
+  logger.info(`Usuarios a procesar: ${users.map((u) => u.id).join(', ')}`);
+
+  let anyFailed = false;
+  for (const user of users) {
+    try {
+      const result = await procesarUsuario(user);
+      if (!result.success) anyFailed = true;
+    } catch (err) {
+      // Aislamiento: el fallo de un usuario no frena a los demás.
+      anyFailed = true;
+      logger.error(`[${user.id}] Error fatal procesando usuario: ${(err as Error).message}`);
+      console.error(`💥 [${user.id}] ERROR FATAL:`, err);
+    }
+  }
+
+  process.exit(anyFailed ? 1 : 0);
 }
 
 main().catch((err) => {

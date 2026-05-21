@@ -3,6 +3,7 @@ import { logger } from '../config';
 import { Entrada, Notificacion } from '../pjn-api/types';
 
 export interface EntradaApiRow {
+  user_id: string;
   entrada_id: number;
   expediente_caratula: string;
   expediente_clave: string;
@@ -19,6 +20,7 @@ export interface EntradaApiRow {
 }
 
 export interface NotificacionApiRow {
+  user_id: string;
   notificacion_id: number;
   expediente_numeracion: string;
   expediente_caratula: string;
@@ -36,8 +38,10 @@ const ENTRADAS_TABLE = 'entradas_api';
 
 export class NotificacionesApiRepo {
   private client: SupabaseClient;
+  private userId: string;
 
-  constructor() {
+  constructor(userId: string = 'matias') {
+    this.userId = userId;
     const url = process.env.SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !key) {
@@ -57,6 +61,7 @@ export class NotificacionesApiRepo {
     const { data, error } = await this.client
       .from(TABLE)
       .select('notificacion_id')
+      .eq('user_id', this.userId)
       .eq('notificacion_id', id)
       .maybeSingle();
     if (error) throw error;
@@ -65,6 +70,7 @@ export class NotificacionesApiRepo {
 
   async insertIfMissing(notif: Notificacion): Promise<boolean> {
     const row = {
+      user_id: this.userId,
       notificacion_id: notif.id,
       expediente_numeracion: notif.expediente.numeracion,
       expediente_caratula: notif.expediente.caratula,
@@ -90,6 +96,7 @@ export class NotificacionesApiRepo {
     const { error } = await this.client
       .from(TABLE)
       .update({ enviada: true, fecha_envio: new Date().toISOString() })
+      .eq('user_id', this.userId)
       .eq('notificacion_id', id);
     if (error) throw error;
   }
@@ -98,6 +105,7 @@ export class NotificacionesApiRepo {
     const { data, error } = await this.client
       .from(TABLE)
       .select('*')
+      .eq('user_id', this.userId)
       .eq('enviada', false)
       .order('fecha', { ascending: true });
     if (error) throw error;
@@ -123,6 +131,7 @@ export class NotificacionesApiRepo {
 
   async insertEntradaIfMissing(entrada: Entrada): Promise<boolean> {
     const row = {
+      user_id: this.userId,
       entrada_id: entrada.id,
       expediente_caratula: entrada.payload?.caratulaExpediente ?? '(sin carátula)',
       expediente_clave: entrada.payload?.claveExpediente ?? '',
@@ -147,6 +156,7 @@ export class NotificacionesApiRepo {
     const { error } = await this.client
       .from(ENTRADAS_TABLE)
       .update({ enviada: true, fecha_envio: new Date().toISOString() })
+      .eq('user_id', this.userId)
       .eq('entrada_id', id);
     if (error) throw error;
   }
@@ -155,6 +165,7 @@ export class NotificacionesApiRepo {
     const { data, error } = await this.client
       .from(ENTRADAS_TABLE)
       .select('*')
+      .eq('user_id', this.userId)
       .eq('enviada', false)
       .order('fecha_accion', { ascending: true });
     if (error) throw error;
@@ -163,9 +174,9 @@ export class NotificacionesApiRepo {
 
   async getStats(): Promise<{ total: number; pendientes: number; enviadas: number }> {
     const [total, pendientes, enviadas] = await Promise.all([
-      this.client.from(TABLE).select('*', { count: 'exact', head: true }),
-      this.client.from(TABLE).select('*', { count: 'exact', head: true }).eq('enviada', false),
-      this.client.from(TABLE).select('*', { count: 'exact', head: true }).eq('enviada', true),
+      this.client.from(TABLE).select('*', { count: 'exact', head: true }).eq('user_id', this.userId),
+      this.client.from(TABLE).select('*', { count: 'exact', head: true }).eq('user_id', this.userId).eq('enviada', false),
+      this.client.from(TABLE).select('*', { count: 'exact', head: true }).eq('user_id', this.userId).eq('enviada', true),
     ]);
     if (total.error || pendientes.error || enviadas.error) {
       logger.warn('Error en getStats', { total: total.error, pendientes: pendientes.error, enviadas: enviadas.error });

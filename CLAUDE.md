@@ -9,19 +9,21 @@ Cada notificación o entrada nueva se manda por Telegram con su PDF y un header 
 
 ## Arquitectura
 
-- **Auth**: OIDC contra Keycloak (`sso.pjn.gov.ar`, realm `pjn`). Dos clients distintos, cada uno con su refresh_token. Los RT tienen TTL ~30 min, **rotan en cada uso** y se persisten en `kv_config`:
-  - `pjn-sne` ↔ `kv_config.pjn_refresh_token_sne` (notificaciones)
-  - `pjn-portal` ↔ `kv_config.pjn_refresh_token_portal` (entradas)
+- **Multi-usuario**: el monitor procesa N usuarios PJN (uno o varios), cada uno con su propio bot de Telegram. Se configuran en el env/secret `PJN_USERS` (JSON array). El loader vive en `src/users.ts` (con fallback a un solo usuario `matias` desde vars legacy). Cada usuario se procesa aislado en su try/catch: si uno falla, los demás siguen.
+- **Auth**: OIDC contra Keycloak (`sso.pjn.gov.ar`, realm `pjn`). Dos clients distintos, cada uno con su refresh_token. Los RT tienen TTL ~30 min, **rotan en cada uso** y se persisten en `kv_config` namespaceados por usuario:
+  - `pjn-sne` ↔ `kv_config.pjn_refresh_token_sne_<userId>` (notificaciones)
+  - `pjn-portal` ↔ `kv_config.pjn_refresh_token_portal_<userId>` (entradas)
+  - helpers de keys: `rtKeySne(id)`, `rtKeyPortal(id)`, `alertKey(id)` en `src/users.ts`
 - **Notificaciones**:
   - `GET https://notif.pjn.gov.ar/api/notificaciones?bandeja=RECIBIDAS&fechaDesde=DDMMYYYY&fechaHasta=DDMMYYYY&page=N&pageSize=M`
   - `GET https://notif.pjn.gov.ar/api/notificaciones/RECIBIDAS/{id}/pdf`
 - **Entradas / eventos**:
   - `GET https://api.pjn.gov.ar/eventos/?page=N&pageSize=M&categoria=judicial`
   - `GET https://api.pjn.gov.ar/eventos/{id}/pdf` (cuando `hasDocument=true`)
-- **Storage**: Supabase Postgres.
-  - `notificaciones_api` (PK `notificacion_id`)
-  - `entradas_api` (PK `entrada_id`)
-  - `kv_config` (refresh_tokens rotados)
+- **Storage**: Supabase Postgres, multi-tenant (columna `user_id`). Acceso con **service_role key** (bypassea RLS; las 3 tablas tienen RLS habilitada sin policies).
+  - `notificaciones_api` (PK `(user_id, notificacion_id)`)
+  - `entradas_api` (PK `(user_id, entrada_id)`)
+  - `kv_config` (refresh_tokens rotados + flags, keys namespaceadas por usuario)
 - **Telegram**: Telegraf, dos formatos:
   - 🔔 `NUEVA NOTIFICACIÓN JUDICIAL` (PDF de la cédula)
   - 📥 `NUEVA ENTRADA` (PDF del despacho + link al SCW)
@@ -37,24 +39,29 @@ src/
     keycloak.ts           # refresh OIDC con onRefresh callback
     notificaciones.ts     # list + getPdf (client pjn-sne)
     eventos.ts            # list + getPdf (client pjn-portal)
+  bootstrap/
+    auto-bootstrap.ts     # captura RT vía Playwright (CLI + auto-recovery), por usuario
   monitor/
-    api-monitor.ts        # orchestrador: refresh → list → insert → send → mark
+    api-monitor.ts        # orchestrador por usuario: refresh → list → insert → send → mark
   database/
-    notificaciones-api-repo.ts   # repo Supabase
+    notificaciones-api-repo.ts   # repo Supabase (filtra por user_id)
   telegram/
-    telegram-bot.ts       # Telegraf wrapper
+    telegram-bot.ts       # Telegraf wrapper (config por constructor: token+chatId)
+  users.ts                # loadUsers() + helpers de keys namespaceadas
   config.ts               # env + winston logger
-  check-now.ts            # entrypoint usado por GitHub Actions
-  monitor.ts              # entrypoint con cron interno (loop local)
+  check-now.ts            # entrypoint CI: itera usuarios, auto-recovery, alerta
+  monitor.ts              # entrypoint con cron interno (loop local, multi-usuario)
   index.ts                # alias de monitor.ts
   test-api-flow.ts        # smoke test e2e
 scripts/
-  bootstrap-token.ts      # login Playwright one-shot, guarda RT en Supabase
+  bootstrap-token.ts      # login Playwright one-shot por usuario, guarda RT en Supabase
 supabase/
   migrations/
     20260503_notificaciones_api.sql
     20260504_kv_config.sql
     20260505_entradas_api.sql
+    20260506_security_hardening.sql   # RLS on en las 3 tablas
+    20260507_multi_tenant.sql         # user_id + PK compuesta + rename de keys
 ```
 
 ## Idempotencia y dedup
@@ -82,6 +89,6 @@ Ver `.env.example`. En CI van como GitHub Secrets/vars (workflow lee de `secrets
 
 ## Nota de operación
 
-Si alguno de los dos refresh_tokens en `kv_config` (`pjn_refresh_token_sne`, `pjn_refresh_token_portal`) está caducado, la rama correspondiente falla con `Keycloak refresh failed (400): Token is not active`. Solución: `npm run bootstrap:token` (captura ambos en una sola sesión).
+Si alguno de los refresh_tokens en `kv_config` (`pjn_refresh_token_sne_<id>`, `pjn_refresh_token_portal_<id>`) está caducado, ese flujo falla con `Keycloak refresh failed (400): Token is not active`. El auto-recovery intenta re-bootstrap headless solo; si no puede (captcha/MFA/clave cambiada), manda una alerta por Telegram cada 6h. Solución manual: `npm run bootstrap:token`.
 
 El cron está en `*/25` adrede: el RT tiene TTL 30 min y rota en cada uso; con `*/30` cualquier demora del runner deja la sesión muerta entre corridas.

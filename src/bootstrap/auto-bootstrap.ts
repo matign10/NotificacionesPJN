@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { logger } from '../config';
 import { NotificacionesApiRepo } from '../database/notificaciones-api-repo';
+import { rtKeySne, rtKeyPortal } from '../users';
 
 const LOGS_DIR = path.join(process.cwd(), 'logs');
 function ensureLogsDir(): string {
@@ -28,7 +29,8 @@ interface AppTarget {
   label: string;
   url: string;
   ssKey: string;
-  kvKey: string;
+  // Construye la key namespaceada en kv_config para un usuario dado.
+  kvKey: (userId: string) => string;
 }
 
 export const BOOTSTRAP_TARGETS: AppTarget[] = [
@@ -36,13 +38,13 @@ export const BOOTSTRAP_TARGETS: AppTarget[] = [
     label: 'pjn-sne (notificaciones)',
     url: 'https://notif.pjn.gov.ar/',
     ssKey: 'oidc.user:https://sso.pjn.gov.ar/auth/realms/pjn:pjn-sne',
-    kvKey: 'pjn_refresh_token_sne',
+    kvKey: rtKeySne,
   },
   {
     label: 'pjn-portal (entradas)',
     url: 'https://portalpjn.pjn.gov.ar/',
     ssKey: 'oidc.user:https://sso.pjn.gov.ar/auth/realms/pjn:pjn-portal',
-    kvKey: 'pjn_refresh_token_portal',
+    kvKey: rtKeyPortal,
   },
 ];
 
@@ -50,6 +52,7 @@ const TIMEOUT_MS = 5 * 60 * 1000;
 const POLL_MS = 1000;
 
 export interface BootstrapOptions {
+  userId?: string;
   username?: string;
   password?: string;
   headless?: boolean;
@@ -137,7 +140,7 @@ async function captureRt(
       await page.waitForTimeout(POLL_MS);
     }
     if (!raw) {
-      await dumpPage(page, `timeout-${target.kvKey}`);
+      await dumpPage(page, `timeout-${target.label}`);
       throw new Error(`Timeout esperando token de ${target.label}. Ver logs/ para screenshot.`);
     }
 
@@ -156,13 +159,14 @@ async function captureRt(
  * auto-recovery del monitor cuando la sesion Keycloak se invalida.
  */
 export async function runBootstrap(opts: BootstrapOptions = {}): Promise<Record<string, string>> {
+  const userId = opts.userId ?? 'matias';
   const username = opts.username ?? process.env.PJN_USERNAME;
   const password = opts.password ?? process.env.PJN_PASSWORD;
   const headless = opts.headless ?? process.env.HEADLESS_MODE !== 'false';
   const persist = opts.persist ?? true;
   const autoCreds = username && password ? { user: username, pass: password } : null;
 
-  logger.info(`Bootstrap: modo=${autoCreds ? 'auto' : 'manual'} headless=${headless}`);
+  logger.info(`Bootstrap usuario "${userId}": modo=${autoCreds ? 'auto' : 'manual'} headless=${headless}`);
 
   const browser = await chromium.launch({
     headless,
@@ -180,15 +184,15 @@ export async function runBootstrap(opts: BootstrapOptions = {}): Promise<Record<
   try {
     for (const target of BOOTSTRAP_TARGETS) {
       const rt = await captureRt(context, target, autoCreds);
-      tokens[target.kvKey] = rt;
-      logger.info(`Bootstrap OK: ${target.label}`);
+      tokens[target.kvKey(userId)] = rt;
+      logger.info(`Bootstrap OK: ${target.label} (usuario ${userId})`);
     }
   } finally {
     await browser.close();
   }
 
   if (persist && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    const repo = new NotificacionesApiRepo();
+    const repo = new NotificacionesApiRepo(userId);
     for (const [key, value] of Object.entries(tokens)) {
       await repo.setConfig(key, value);
       logger.info(`Bootstrap: persistido ${key} en kv_config.`);

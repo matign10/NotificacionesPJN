@@ -30,9 +30,6 @@ export const logger = winston.createLogger({
 
 export function checkConfig(): boolean {
   const required = [
-    'PJN_REFRESH_TOKEN',
-    'TELEGRAM_BOT_TOKEN',
-    'TELEGRAM_CHAT_ID',
     'SUPABASE_URL',
     'SUPABASE_SERVICE_ROLE_KEY',
   ];

@@ -37,28 +37,25 @@ jobs:
 
     - name: Diagnóstico de secrets (sin revelar valores)
       env:
+        PJN_USERS: ${{ secrets.PJN_USERS }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        PJN_USERNAME: ${{ secrets.PJN_USERNAME }}
-        PJN_PASSWORD: ${{ secrets.PJN_PASSWORD }}
       run: |
+        echo "PJN_USERS set:                 ${PJN_USERS:+yes}${PJN_USERS:-NO}"
         echo "TELEGRAM_BOT_TOKEN set:        ${TELEGRAM_BOT_TOKEN:+yes}${TELEGRAM_BOT_TOKEN:-NO}"
         echo "TELEGRAM_CHAT_ID set:          ${TELEGRAM_CHAT_ID:+yes}${TELEGRAM_CHAT_ID:-NO}"
         echo "SUPABASE_URL set:              ${SUPABASE_URL:+yes}${SUPABASE_URL:-NO}"
         echo "SUPABASE_SERVICE_ROLE_KEY set: ${SUPABASE_SERVICE_ROLE_KEY:+yes}${SUPABASE_SERVICE_ROLE_KEY:-NO}"
-        echo "PJN_USERNAME set:              ${PJN_USERNAME:+yes}${PJN_USERNAME:-NO}"
-        echo "PJN_PASSWORD set:              ${PJN_PASSWORD:+yes}${PJN_PASSWORD:-NO}"
 
     - name: Ejecutar verificación
       env:
+        PJN_USERS: ${{ secrets.PJN_USERS }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        PJN_USERNAME: ${{ secrets.PJN_USERNAME }}
-        PJN_PASSWORD: ${{ secrets.PJN_PASSWORD }}
         LOOKBACK_DAYS: ${{ vars.LOOKBACK_DAYS || '60' }}
         ATTACH_PDF: ${{ vars.ATTACH_PDF || 'true' }}
         HEADLESS_MODE: 'true'

@@ -5,18 +5,31 @@
 import cron from 'node-cron';
 import dotenv from 'dotenv';
 import { ApiMonitor } from './monitor/api-monitor';
+import { loadUsers } from './users';
 import { logger } from './config';
 
 dotenv.config();
 
-async function iniciarMonitor() {
-  logger.info('Iniciando Monitor (modo API)...');
+async function correrTodos(): Promise<void> {
+  const users = loadUsers();
+  for (const user of users) {
+    const monitor = new ApiMonitor(user);
+    try {
+      await monitor.initialize();
+      await monitor.run();
+    } catch (err) {
+      logger.error(`[${user.id}] Error en corrida: ${(err as Error).message}`);
+    } finally {
+      await monitor.cleanup().catch(() => undefined);
+    }
+  }
+}
 
-  const monitor = new ApiMonitor();
-  await monitor.initialize();
+async function iniciarMonitor() {
+  logger.info('Iniciando Monitor (modo API, multi-usuario)...');
 
   logger.info('Ejecutando verificación inicial...');
-  await monitor.run();
+  await correrTodos();
 
   const intervalo = parseInt(process.env.CHECK_INTERVAL_MINUTES || '30', 10);
   const cronExpr = `*/${intervalo} * * * *`;
@@ -25,7 +38,7 @@ async function iniciarMonitor() {
   cron.schedule(cronExpr, async () => {
     logger.info('[scheduled] verificación...');
     try {
-      await monitor.run();
+      await correrTodos();
     } catch (err) {
       logger.error('[scheduled] Error:', err);
     }
@@ -33,7 +46,6 @@ async function iniciarMonitor() {
 
   process.on('SIGINT', async () => {
     logger.info('SIGINT, cerrando...');
-    await monitor.cleanup().catch(() => undefined);
     process.exit(0);
   });
 
