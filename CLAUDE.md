@@ -92,3 +92,17 @@ Ver `.env.example`. En CI van como GitHub Secrets/vars (workflow lee de `secrets
 Si alguno de los refresh_tokens en `kv_config` (`pjn_refresh_token_sne_<id>`, `pjn_refresh_token_portal_<id>`) está caducado, ese flujo falla con `Keycloak refresh failed (400): Token is not active`. El auto-recovery intenta re-bootstrap headless solo; si no puede (captcha/MFA/clave cambiada), manda una alerta por Telegram cada 6h. Solución manual: `npm run bootstrap:token`.
 
 El cron está en `*/25` adrede: el RT tiene TTL 30 min y rota en cada uso; con `*/30` cualquier demora del runner deja la sesión muerta entre corridas.
+
+## Ideas / mejoras futuras (no implementadas)
+
+Funcionalidades pedidas pero pospuestas. El sistema hoy solo **envía** por Telegram; para que el usuario pueda **darle órdenes al bot** hace falta una vía de recepción (no existe hoy).
+
+1. **Toggle de Entradas por usuario**: que cada bot permita prender/apagar la recepción de la solapa "Entradas" (`/entradas_on`, `/entradas_off`), independiente de las notificaciones. Implica un flag por usuario (ej. tabla `preferencias.entradas_enabled`) que el monitor consulta antes de procesar el flujo de entradas.
+
+2. **Silenciar un expediente puntual**: dejar de recibir avisos de un expediente específico. UX ideal: botón inline "🔕 Silenciar este expediente" debajo de cada aviso. Implica tabla `expedientes_silenciados (user_id, clave)` que el monitor consulta para filtrar.
+
+**Vía de recepción — dos enfoques evaluados:**
+- **Webhook + Supabase Edge Function** (recomendado): tiempo real, soporta botones inline. Deploy por MCP; registrar webhook de cada bot con `setWebhook` (1 URL por bot). La function maneja comandos y `callback_query`, actualiza las tablas de preferencias.
+- **Polling de getUpdates en cada corrida** (simple): sin infra nueva, pero las órdenes tardan hasta 25 min en aplicarse y los botones inline quedan con UX pobre (el `answerCallbackQuery` no llega a tiempo). Solo apto para comandos de texto.
+
+Decisión pendiente del usuario. Recomendación: webhook + edge function por el botón de silenciar de un toque.
