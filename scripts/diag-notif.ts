@@ -13,7 +13,8 @@
 import dotenv from 'dotenv';
 import { KeycloakClient } from '../src/pjn-api/keycloak';
 import { NotificacionesApiRepo } from '../src/database/notificaciones-api-repo';
-import { loadUsers, rtKeySne } from '../src/users';
+import { loadUsers, rtKeySne, PjnUser } from '../src/users';
+import { runBootstrap, isSessionDeadError } from '../src/bootstrap/auto-bootstrap';
 
 dotenv.config();
 
@@ -50,20 +51,37 @@ async function attempt(label: string, url: string, headers: Record<string, strin
   }
 }
 
+async function tokenParaUsuario(user: PjnUser, repo: NotificacionesApiRepo): Promise<string> {
+  const buildKc = (rt: string) =>
+    new KeycloakClient({
+      clientId: 'pjn-sne',
+      refreshToken: rt,
+      onRefresh: async (nrt) => { await repo.setConfig(rtKeySne(user.id), nrt); },
+    });
+
+  let rt = await repo.getConfig(rtKeySne(user.id));
+  if (!rt) throw new Error(`No hay ${rtKeySne(user.id)} en kv_config.`);
+
+  try {
+    return await buildKc(rt).getAccessToken();
+  } catch (err) {
+    if (!isSessionDeadError(err)) throw err;
+    // RT stale: re-bootstrap headless como hace el monitor, y reintentar.
+    console.log('  RT stale, corriendo auto-bootstrap headless...');
+    await runBootstrap({ userId: user.id, username: user.pjnUsername, password: user.pjnPassword, headless: true });
+    rt = await repo.getConfig(rtKeySne(user.id));
+    if (!rt) throw new Error('Bootstrap no dejó RT en kv_config.');
+    return await buildKc(rt).getAccessToken();
+  }
+}
+
 async function main() {
   const userId = process.env.DIAG_USER || loadUsers()[0].id;
-  console.log(`=== DIAG notif API — usuario "${userId}" ===`);
+  const user = loadUsers().find((u) => u.id === userId) ?? loadUsers()[0];
+  console.log(`=== DIAG notif API — usuario "${user.id}" ===`);
 
-  const repo = new NotificacionesApiRepo(userId);
-  const rt = await repo.getConfig(rtKeySne(userId));
-  if (!rt) throw new Error(`No hay ${rtKeySne(userId)} en kv_config.`);
-
-  const kc = new KeycloakClient({
-    clientId: 'pjn-sne',
-    refreshToken: rt,
-    onRefresh: async (nrt) => { await repo.setConfig(rtKeySne(userId), nrt); },
-  });
-  const token = await kc.getAccessToken();
+  const repo = new NotificacionesApiRepo(user.id);
+  const token = await tokenParaUsuario(user, repo);
 
   // Claims NO sensibles del access token (sin sub/nombre/cuit/token).
   const c = decodeClaims(token);
