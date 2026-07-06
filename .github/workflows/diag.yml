@@ -1,6 +1,11 @@
 name: DIAG - Notif API 401
 
 on:
+  push:
+    branches: [claude/review-last-error-grDGB]
+    paths:
+      - 'scripts/diag-notif.ts'
+      - '.github/workflows/diag.yml'
   workflow_dispatch:
     inputs:
       user:
