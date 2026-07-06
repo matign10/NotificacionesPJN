@@ -1,7 +1,14 @@
 import { KeycloakClient } from './keycloak';
+import { apiFetch } from './http';
 import { Bandeja, ListNotificacionesParams, Notificacion, NotificacionesPage } from './types';
 
 const BASE = 'https://notif.pjn.gov.ar/api';
+
+const HEADERS = {
+  Accept: 'application/json, text/plain, */*',
+  Origin: 'https://notif.pjn.gov.ar',
+  Referer: 'https://notif.pjn.gov.ar/recibidas',
+};
 
 function formatDate(d: Date): string {
   const dd = String(d.getDate()).padStart(2, '0');
@@ -13,16 +20,6 @@ function formatDate(d: Date): string {
 export class NotificacionesClient {
   constructor(private keycloak: KeycloakClient) {}
 
-  private async authHeaders(): Promise<Record<string, string>> {
-    const token = await this.keycloak.getAccessToken();
-    return {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json, text/plain, */*',
-      Origin: 'https://notif.pjn.gov.ar',
-      Referer: 'https://notif.pjn.gov.ar/recibidas',
-    };
-  }
-
   async listPage(params: ListNotificacionesParams): Promise<NotificacionesPage> {
     const qs = new URLSearchParams({
       bandeja: params.bandeja ?? 'RECIBIDAS',
@@ -32,14 +29,13 @@ export class NotificacionesClient {
       pageSize: String(params.pageSize ?? 50),
     });
 
-    const res = await fetch(`${BASE}/notificaciones?${qs}`, {
-      headers: await this.authHeaders(),
-    });
-
-    if (!res.ok) {
-      throw new Error(`list notificaciones failed (${res.status}): ${await res.text()}`);
+    try {
+      const res = await apiFetch(this.keycloak, `${BASE}/notificaciones?${qs}`, HEADERS);
+      return (await res.json()) as NotificacionesPage;
+    } catch (err) {
+      const st = (err as { status?: number }).status;
+      throw new Error(`list notificaciones failed ${(err as Error).message}${st === 401 ? ' [401 persistente: probable incidente transitorio del PJN, reintenta la próxima corrida]' : ''}`);
     }
-    return (await res.json()) as NotificacionesPage;
   }
 
   async listAll(params: ListNotificacionesParams): Promise<Notificacion[]> {
@@ -55,14 +51,12 @@ export class NotificacionesClient {
   }
 
   async getPdf(notificacionId: number, bandeja: Bandeja = 'RECIBIDAS'): Promise<Buffer> {
-    const res = await fetch(`${BASE}/notificaciones/${bandeja}/${notificacionId}/pdf`, {
-      headers: await this.authHeaders(),
-    });
-
-    if (!res.ok) {
-      throw new Error(`getPdf failed for ${notificacionId} (${res.status}): ${await res.text()}`);
+    try {
+      const res = await apiFetch(this.keycloak, `${BASE}/notificaciones/${bandeja}/${notificacionId}/pdf`, HEADERS);
+      const buf = await res.arrayBuffer();
+      return Buffer.from(buf);
+    } catch (err) {
+      throw new Error(`getPdf failed for ${notificacionId} ${(err as Error).message}`);
     }
-    const buf = await res.arrayBuffer();
-    return Buffer.from(buf);
   }
 }
