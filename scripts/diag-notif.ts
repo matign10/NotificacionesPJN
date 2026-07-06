@@ -75,78 +75,59 @@ async function tokenParaUsuario(user: PjnUser, repo: NotificacionesApiRepo): Pro
   }
 }
 
-async function main() {
-  const userId = process.env.DIAG_USER || loadUsers()[0].id;
-  const user = loadUsers().find((u) => u.id === userId) ?? loadUsers()[0];
-  console.log(`=== DIAG notif API — usuario "${user.id}" ===`);
-
+async function checkUser(user: PjnUser): Promise<void> {
+  console.log(`\n======== usuario "${user.id}" ========`);
   const repo = new NotificacionesApiRepo(user.id);
-  const token = await tokenParaUsuario(user, repo);
+  let token: string;
+  try {
+    token = await tokenParaUsuario(user, repo);
+  } catch (err) {
+    console.log(`  [${user.id}] NO se pudo obtener token: ${(err as Error).message.slice(0, 120)}`);
+    return;
+  }
 
-  // Claims NO sensibles del access token (sin sub/nombre/cuit/token).
   const c = decodeClaims(token);
-  const exp = c.exp ? new Date((c.exp as number) * 1000).toISOString() : '?';
-  const iat = c.iat ? new Date((c.iat as number) * 1000).toISOString() : '?';
-  const realmRoles = (c.realm_access as { roles?: string[] } | undefined)?.roles ?? [];
-  const resourceKeys = Object.keys((c.resource_access as Record<string, unknown>) ?? {});
   const sneRoles = (c.resource_access as Record<string, { roles?: string[] }> | undefined)?.['pjn-sne']?.roles ?? [];
-  console.log('--- access token claims ---');
-  console.log(`  iss=${c.iss}`);
-  console.log(`  azp=${c.azp}  aud=${JSON.stringify(c.aud)}`);
-  console.log(`  scope=${c.scope}`);
-  console.log(`  typ=${c.typ}  iat=${iat}  exp=${exp}`);
-  console.log(`  realm_access.roles=${JSON.stringify(realmRoles)}`);
-  console.log(`  resource_access keys=${JSON.stringify(resourceKeys)}`);
-  console.log(`  resource_access['pjn-sne'].roles=${JSON.stringify(sneRoles)}`);
+  console.log(`  roles pjn-sne=${JSON.stringify(sneRoles)}`);
 
   const desde = new Date(); desde.setDate(desde.getDate() - 60);
   const hasta = new Date();
   const qs = `bandeja=RECIBIDAS&fechaDesde=${fmt(desde)}&fechaHasta=${fmt(hasta)}&page=0&pageSize=1`;
   const listUrl = `${API}/notificaciones?${qs}`;
-  const auth = `Bearer ${token}`;
-  const baseHeaders = (cookie?: string): Record<string, string> => ({
-    Authorization: auth,
-    Accept: 'application/json, text/plain, */*',
-    Origin: BASE,
-    Referer: `${BASE}/recibidas`,
-    ...(cookie ? { Cookie: cookie } : {}),
-  });
-
-  const N = 30;
-
-  // Capturar la cookie F5 de persistencia visitando la home.
-  let f5Cookie = '';
-  try {
-    const home = await fetch(`${BASE}/`, { headers: { Accept: 'text/html' } });
-    const sc = (home.headers as unknown as { getSetCookie?: () => string[] }).getSetCookie?.() ?? [];
-    f5Cookie = sc.map((s) => s.split(';')[0]).join('; ');
-    console.log(`\n[cookie F5] ${sc.length} cookie(s): ${f5Cookie.slice(0, 60)}...`);
-  } catch (err) {
-    console.log(`\n[cookie F5] ERROR ${(err as Error).message}`);
-  }
-
-  // BURST A — sin cookie (como el cliente actual). Rebota entre nodos F5.
-  const stats = async (label: string, cookie?: string) => {
-    const codes: Record<number, number> = {};
-    let sample401 = '';
-    for (let i = 0; i < N; i++) {
-      try {
-        const res = await fetch(listUrl, { headers: baseHeaders(cookie) });
-        codes[res.status] = (codes[res.status] ?? 0) + 1;
-        if (res.status === 401 && !sample401) sample401 = (await res.text()).slice(0, 140);
-        else await res.text();
-      } catch (err) {
-        codes[0] = (codes[0] ?? 0) + 1;
-        if (!sample401) sample401 = `ERR ${(err as Error).message}`;
-      }
+  const codes: Record<number, number> = {};
+  let sampleErr = '';
+  for (let i = 0; i < 5; i++) {
+    try {
+      const res = await fetch(listUrl, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json, text/plain, */*',
+          Origin: BASE, Referer: `${BASE}/recibidas`,
+        },
+      });
+      codes[res.status] = (codes[res.status] ?? 0) + 1;
+      const body = await res.text();
+      if (!res.ok && !sampleErr) sampleErr = body.slice(0, 120);
+    } catch (err) {
+      codes[0] = (codes[0] ?? 0) + 1;
+      if (!sampleErr) sampleErr = (err as Error).message;
     }
-    console.log(`\n[${label}] ${N} requests -> ${JSON.stringify(codes)}`);
-    if (sample401) console.log(`  muestra fallo: ${sample401}`);
-  };
+  }
+  console.log(`  [${user.id}] notif list x5 -> ${JSON.stringify(codes)}`);
+  if (sampleErr) console.log(`    muestra fallo: ${sampleErr}`);
+}
 
-  await stats('BURST-A sin-cookie', undefined);
-  await stats('BURST-B con-cookie-F5', f5Cookie || undefined);
-
+async function main() {
+  const only = process.env.DIAG_USER;
+  const users = loadUsers().filter((u) => !only || u.id === only);
+  console.log(`=== DIAG notif API — usuarios: ${users.map((u) => u.id).join(', ')} ===`);
+  for (const u of users) {
+    try {
+      await checkUser(u);
+    } catch (err) {
+      console.log(`[${u.id}] error inesperado: ${(err as Error).message.slice(0, 120)}`);
+    }
+  }
   console.log('\n=== fin DIAG ===');
 }
 
