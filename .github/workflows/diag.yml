@@ -1,0 +1,41 @@
+name: DIAG - Notif API 401
+
+on:
+  push:
+    branches: [claude/review-last-error-grDGB]
+    paths:
+      - 'scripts/diag-notif.ts'
+      - '.github/workflows/diag.yml'
+  workflow_dispatch:
+    inputs:
+      user:
+        description: 'ID de usuario a diagnosticar (matias / jorge / emilio)'
+        required: false
+        default: 'matias'
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci --ignore-scripts
+
+      - name: Chromium (para auto-bootstrap si el RT esta stale)
+        run: npx playwright install --with-deps chromium
+
+      - name: Diagnóstico
+        env:
+          PJN_USERS: ${{ secrets.PJN_USERS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DIAG_USER: ${{ github.event.inputs.user }}
+        run: npx tsx scripts/diag-notif.ts

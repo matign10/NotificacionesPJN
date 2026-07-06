@@ -1,20 +1,17 @@
 import { KeycloakClient } from './keycloak';
+import { apiFetch } from './http';
 import { Entrada, EntradasPage, ListEntradasParams } from './types';
 
 const BASE = 'https://api.pjn.gov.ar/eventos';
 
+const HEADERS = {
+  Accept: 'application/json, text/plain, */*',
+  Origin: 'https://portalpjn.pjn.gov.ar',
+  Referer: 'https://portalpjn.pjn.gov.ar/',
+};
+
 export class EventosClient {
   constructor(private keycloak: KeycloakClient) {}
-
-  private async authHeaders(): Promise<Record<string, string>> {
-    const token = await this.keycloak.getAccessToken();
-    return {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json, text/plain, */*',
-      Origin: 'https://portalpjn.pjn.gov.ar',
-      Referer: 'https://portalpjn.pjn.gov.ar/',
-    };
-  }
 
   async listPage(params: ListEntradasParams = {}): Promise<EntradasPage> {
     const qs = new URLSearchParams({
@@ -23,28 +20,23 @@ export class EventosClient {
       categoria: params.categoria ?? 'judicial',
     });
 
-    const res = await fetch(`${BASE}/?${qs}`, {
-      headers: await this.authHeaders(),
-    });
-
-    if (!res.ok) {
-      throw new Error(`list eventos failed (${res.status}): ${await res.text()}`);
+    try {
+      const res = await apiFetch(this.keycloak, `${BASE}/?${qs}`, HEADERS);
+      return (await res.json()) as EntradasPage;
+    } catch (err) {
+      const st = (err as { status?: number }).status;
+      throw new Error(`list eventos failed ${(err as Error).message}${st === 401 ? ' [401 persistente: probable incidente transitorio del PJN, reintenta la próxima corrida]' : ''}`);
     }
-    return (await res.json()) as EntradasPage;
   }
 
   async getPdf(entradaId: number): Promise<Buffer> {
-    const res = await fetch(`${BASE}/${entradaId}/pdf`, {
-      headers: {
-        ...(await this.authHeaders()),
-        Accept: 'application/pdf',
-      },
-    });
-    if (!res.ok) {
-      throw new Error(`getPdf entrada failed for ${entradaId} (${res.status}): ${await res.text()}`);
+    try {
+      const res = await apiFetch(this.keycloak, `${BASE}/${entradaId}/pdf`, { ...HEADERS, Accept: 'application/pdf' });
+      const buf = await res.arrayBuffer();
+      return Buffer.from(buf);
+    } catch (err) {
+      throw new Error(`getPdf entrada failed for ${entradaId} ${(err as Error).message}`);
     }
-    const buf = await res.arrayBuffer();
-    return Buffer.from(buf);
   }
 
   async listAll(params: ListEntradasParams = {}): Promise<Entrada[]> {
