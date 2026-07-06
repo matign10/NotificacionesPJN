@@ -104,65 +104,48 @@ async function main() {
   const qs = `bandeja=RECIBIDAS&fechaDesde=${fmt(desde)}&fechaHasta=${fmt(hasta)}&page=0&pageSize=1`;
   const listUrl = `${API}/notificaciones?${qs}`;
   const auth = `Bearer ${token}`;
-
-  // A0 — baseline (headers actuales del cliente)
-  await attempt('A0 baseline', listUrl, {
+  const baseHeaders = (cookie?: string): Record<string, string> => ({
     Authorization: auth,
     Accept: 'application/json, text/plain, */*',
     Origin: BASE,
     Referer: `${BASE}/recibidas`,
+    ...(cookie ? { Cookie: cookie } : {}),
   });
 
-  // A1 — cookie jar: primero visitar la SPA para capturar cookies (F5/WAF), reenviarlas
-  let cookieHeader = '';
+  const N = 30;
+
+  // Capturar la cookie F5 de persistencia visitando la home.
+  let f5Cookie = '';
   try {
     const home = await fetch(`${BASE}/`, { headers: { Accept: 'text/html' } });
     const sc = (home.headers as unknown as { getSetCookie?: () => string[] }).getSetCookie?.() ?? [];
-    cookieHeader = sc.map((s) => s.split(';')[0]).join('; ');
-    console.log(`\n[cookie-jar] home HTTP ${home.status} — cookies capturadas: ${sc.length} (${cookieHeader.slice(0, 80)})`);
+    f5Cookie = sc.map((s) => s.split(';')[0]).join('; ');
+    console.log(`\n[cookie F5] ${sc.length} cookie(s): ${f5Cookie.slice(0, 60)}...`);
   } catch (err) {
-    console.log(`\n[cookie-jar] home ERROR ${(err as Error).message}`);
+    console.log(`\n[cookie F5] ERROR ${(err as Error).message}`);
   }
-  await attempt('A1 con-cookies', listUrl, {
-    Authorization: auth,
-    Accept: 'application/json, text/plain, */*',
-    Origin: BASE,
-    Referer: `${BASE}/recibidas`,
-    ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-  });
 
-  // A2 — Referer raíz
-  await attempt('A2 referer-root', listUrl, {
-    Authorization: auth, Accept: 'application/json, text/plain, */*', Origin: BASE, Referer: `${BASE}/`,
-  });
+  // BURST A — sin cookie (como el cliente actual). Rebota entre nodos F5.
+  const stats = async (label: string, cookie?: string) => {
+    const codes: Record<number, number> = {};
+    let sample401 = '';
+    for (let i = 0; i < N; i++) {
+      try {
+        const res = await fetch(listUrl, { headers: baseHeaders(cookie) });
+        codes[res.status] = (codes[res.status] ?? 0) + 1;
+        if (res.status === 401 && !sample401) sample401 = (await res.text()).slice(0, 140);
+        else await res.text();
+      } catch (err) {
+        codes[0] = (codes[0] ?? 0) + 1;
+        if (!sample401) sample401 = `ERR ${(err as Error).message}`;
+      }
+    }
+    console.log(`\n[${label}] ${N} requests -> ${JSON.stringify(codes)}`);
+    if (sample401) console.log(`  muestra fallo: ${sample401}`);
+  };
 
-  // A3 — sin Origin ni Referer
-  await attempt('A3 sin-origin-referer', listUrl, {
-    Authorization: auth, Accept: 'application/json, text/plain, */*',
-  });
-
-  // A4 — con X-Requested-With
-  await attempt('A4 xhr', listUrl, {
-    Authorization: auth, Accept: 'application/json, text/plain, */*', Origin: BASE,
-    Referer: `${BASE}/recibidas`, 'X-Requested-With': 'XMLHttpRequest',
-  });
-
-  // A5 — Accept json estricto + User-Agent de browser
-  await attempt('A5 ua-browser', listUrl, {
-    Authorization: auth, Accept: 'application/json',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-    Origin: BASE, Referer: `${BASE}/recibidas`,
-  });
-
-  // A6 — endpoint sin query (por si cambió el shape/params)
-  await attempt('A6 sin-query', `${API}/notificaciones?bandeja=RECIBIDAS`, {
-    Authorization: auth, Accept: 'application/json, text/plain, */*', Origin: BASE, Referer: `${BASE}/recibidas`,
-  });
-
-  // A7 — endpoint usuario/info (para saber si CUALQUIER endpoint del API acepta el token)
-  await attempt('A7 usuario-info', `${API}/usuario/info`, {
-    Authorization: auth, Accept: 'application/json, text/plain, */*', Origin: BASE, Referer: `${BASE}/`,
-  });
+  await stats('BURST-A sin-cookie', undefined);
+  await stats('BURST-B con-cookie-F5', f5Cookie || undefined);
 
   console.log('\n=== fin DIAG ===');
 }
